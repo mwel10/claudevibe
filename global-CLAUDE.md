@@ -378,9 +378,7 @@ accepted risks accumulate silently.
 
 - Produce a software bill of materials for every release, listing all
   libraries, frameworks, versions, and licences.
-- Generate it automatically with CycloneDX or SPDX, integrated into the
-  pipeline.
-- Store SBOMs in one central location.
+- Generate it automatically when possible.
 
 ## B12. Vulnerability intake and root cause
 
