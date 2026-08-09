@@ -25,7 +25,8 @@ The instructions cover three layers:
   PocketOS, the Mastra npm compromise).
 - **Part B — Secure software development.** The code Claude writes must meet
   a defined security standard, based on CIS Controls v8 §16.1–16.14, OWASP
-  ASVS, and the OWASP Top 10.
+  ASVS, and the OWASP Top 10 — including tracking which AI components built
+  or run the software, not just which libraries did.
 
 All three are binding. Part 0 sets the parameters; Part A governs how Claude
 *operates*; Part B governs what Claude *produces*.
@@ -93,12 +94,13 @@ Ask a block only when its trigger fired in Round 1.
 | Trigger from Round 1 | Ask |
 |---|---|
 | Processes personal data | Which categories, for which purpose, how long retained, and what is the deletion path? Is there a data processing agreement with any third party involved? |
-| Internet-facing | Is there a WAF, rate limiting, or a reverse proxy in front? How will I hear about a vulnerability report from outside (see B12)? |
+| Internet-facing | Is there a WAF, rate limiting, or a reverse proxy in front? How will I hear about a vulnerability report from outside (see B13)? |
 | Has authentication | What is the authorisation model: roles, ownership, multi-tenancy? Which actions need MFA or re-authentication? |
 | Stores data | Which data store, where is it hosted, is it encrypted at rest, and what is the backup and restore path? |
 | Calls external APIs or MCP servers | Which ones, with what scope (read-only or write), and against which resources? What happens if one returns hostile content (see A3)? |
+| Calls or embeds an AI/ML model at runtime | Which provider and model, what data is sent to it, does the provider use that data for further training, and is it listed in the AIBOM (see B12)? |
 | Uses subagents | What is the minimum scope each one needs, and is that scope technically separate from the others? |
-| Has a CI/CD pipeline | Which scanners run today: SAST, DAST, secrets, dependency? Is SBOM generation in place? Is dependency updating automated? |
+| Has a CI/CD pipeline | Which scanners run today: SAST, DAST, secrets, dependency? Is SBOM and AIBOM generation in place? Is dependency updating automated? |
 | Handles money or takes irreversible actions | Which operations are irreversible, and what confirmation sits in front of them? |
 | Will be partly built by someone else | Do the same ASVS level and these rules apply to their work, and how is that demonstrated? |
 
@@ -164,8 +166,9 @@ shape:
 - Destructive actions in this project:
 - Approval gate and how it is enforced:
 - MCP servers / external tools and their scope:
+- AI/ML models called at runtime and what data reaches them:
 - Tool-call logging destination:
-- Scanners and SBOM in the pipeline:
+- Scanners, SBOM, and AIBOM in the pipeline:
 - OPEN: <anything not yet answered>
 - Last reviewed: <date>
 ```
@@ -378,9 +381,36 @@ accepted risks accumulate silently.
 
 - Produce a software bill of materials for every release, listing all
   libraries, frameworks, versions, and licences.
-- Generate it automatically when possible.
+- Generate it automatically with CycloneDX or SPDX, integrated into the
+  pipeline.
+- Store SBOMs in one central location.
 
-## B12. Vulnerability intake and root cause
+## B12. AI Bill of Materials (AIBOM)
+
+Vibe-coded software has two AI surfaces worth tracking separately from the
+regular SBOM: what helped build the code, and what runs inside it.
+
+- **Build-time.** Record which AI tools and model versions were used to
+  generate or materially modify the code (for example, Claude Sonnet 5 via
+  Claude Code), so an issue later traced to a specific model or session can
+  be investigated or reproduced.
+- **Run-time.** If the application itself calls a model in production (an
+  LLM API, an embedding model, a classifier), list it as a dependency in its
+  own right: provider, model name and version, what data is sent to it, and
+  what it returns.
+- **Treat model output as untrusted.** A third-party model endpoint follows
+  the same rule as any other external API under A3: its output is untrusted
+  input, never a trusted instruction, and the provider is a data processor
+  the moment personal data is sent to it.
+- **Note reproducibility limits.** A hosted model can change behaviour
+  without a version bump when the provider updates it server-side. Record
+  the model version you targeted, and flag where exact reproducibility
+  cannot be guaranteed.
+- Generate the AIBOM alongside the SBOM, using CycloneDX's ML-BOM extension
+  where the tooling supports it, and store it in the same central location
+  as the SBOM (B11).
+
+## B13. Vulnerability intake and root cause
 
 If a vulnerability surfaces during a session, in existing code or in a
 dependency, report it explicitly even when it falls outside the scope of the
@@ -391,12 +421,14 @@ If the project is reachable from the internet, provide a route for outsiders
 to report vulnerabilities, and decide in advance how such reports will be
 handled.
 
-## B13. Handover format
+## B14. Handover format
 
 Close every substantial code delivery with a short security note covering:
 
 - Which Top 10 categories were relevant, and how they were addressed.
 - Which new dependencies were added, and why.
+- Which AI models were used to build or run the code, and whether the AIBOM
+  (B12) was updated to reflect them.
 - Which secrets and configuration values the code expects, and where they
   should come from.
 - Which assumptions you made about the environment, scope, or permissions.
@@ -408,4 +440,4 @@ Close every substantial code delivery with a short security note covering:
 
 CIS Controls v8 §16.1–16.14 (Implementation Group 3), and NIST CSF PR.PS-06
 and ID.AM-08. Supporting references: OWASP ASVS, OWASP Top 10, NIST SP 800-61
-Rev. 3.
+Rev. 3, CycloneDX ML-BOM (AIBOM).
