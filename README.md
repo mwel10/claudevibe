@@ -1,8 +1,6 @@
-# claudevibe
-
 # Safe vibe coding: a CLAUDE.md for people who aren't programmers
 
-I'm not a programmer. I do enjoy vibe coding with Claude, describing what I
+I'm not a programmer. I do enjoy vibe coding with Claude — describing what I
 want and letting it build. What I didn't enjoy was the nagging feeling that I
 had no idea whether what came out was safe.
 
@@ -39,18 +37,25 @@ was covered and what wasn't.
 
 ## Installation
 
-Put the file at `~/.claude/CLAUDE.md`. Claude reads it in every session.
+The policy file is `global-CLAUDE.md` in this repository. Install it as
+`~/.claude/CLAUDE.md`, which is where Claude reads it from in every session.
 
 ```bash
 mkdir -p ~/.claude
-curl -o ~/.claude/CLAUDE.md https://raw.githubusercontent.com/<user>/<repo>/main/CLAUDE.md
+curl -o ~/.claude/CLAUDE.md https://raw.githubusercontent.com/mwel10/claudevibe/main/global-CLAUDE.md
 ```
 
-Two levels are in play. `~/.claude/CLAUDE.md` is global and applies
-everywhere. Each project also gets its own `CLAUDE.md` in the project
+The rename is deliberate. Two levels are in play: the global file applies
+everywhere, and each project also gets its own `CLAUDE.md` in the project
 directory, where Claude records that project's intake answers under a
 `## Project addendum: security scope` heading. The global file tells Claude
-what to ask; the project file remembers the answers.
+what to ask; the project file remembers the answers. Keeping the repository
+copy under a different name avoids the confusion of two files with the same
+name and different jobs — and stops Claude from treating this repository's own
+root file as a project addendum when you work on the repository itself.
+
+If you see a `CLAUDE.md` in the root of this repository, that is the addendum
+for this repository as a project, not the file to download.
 
 ## What it's based on
 
@@ -77,10 +82,10 @@ your code. It raises the floor. It doesn't replace the ceiling.
 ## Adapting it
 
 It's written for how I work: solo, no team review, mostly small projects. If
-you work differently, the parts most worth editing are the ASVS decision table
-in 0.5, the destructive-action list in A2, and the scanning requirements in
-B9 — annual penetration tests and monthly DAST scans make sense for some
-projects and are overkill for others.
+you work differently, the parts of `global-CLAUDE.md` most worth editing are
+the ASVS decision table in 0.5, the destructive-action list in A2, and the
+scanning requirements in B9 — annual penetration tests and monthly DAST scans
+make sense for some projects and are overkill for others.
 
 Suggestions and pull requests are welcome, particularly from people who have
 found gaps in it.
