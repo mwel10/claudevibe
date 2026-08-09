@@ -32,8 +32,11 @@ visible.
 hardcoded secrets, no `.env` in git, no string concatenation in queries, no
 hand-rolled crypto. The OWASP Top 10 as a checklist per feature. Rules for
 dependencies, scanning, SBOMs, and what to do about a known vulnerability. It
-ends with a handover format, so every delivery comes with a short note on what
-was covered and what wasn't.
+also keeps an AI Bill of Materials: which model built the code and which
+models, if any, the application calls at runtime, since a third-party model
+endpoint is a dependency and a data flow like any other. It ends with a
+handover format, so every delivery comes with a short note on what was
+covered and what wasn't.
 
 ## Installation
 
@@ -60,8 +63,9 @@ for this repository as a project, not the file to download.
 ## What it's based on
 
 The rules aren't invented. They map to CIS Controls v8 §16.1–16.14, the OWASP
-Top 10, the OWASP Application Security Verification Standard, and NIST CSF
-PR.PS-06 and ID.AM-08. The agent-security half is shaped by real incidents
+Top 10, the OWASP Application Security Verification Standard, NIST CSF
+PR.PS-06 and ID.AM-08, and CycloneDX's ML-BOM extension for the AI Bill of
+Materials. The agent-security half is shaped by real incidents
 involving coding agents — Devin/Sliver, Replit, Amazon Q, RoguePilot,
 PocketOS, and the Mastra npm compromise — where the failure was credential
 scope, untrusted input, or a destructive call that nobody confirmed.
