@@ -1,0 +1,64 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(*drop database*)",
+      "Bash(*drop table*)",
+      "Bash(*truncate table*)",
+      "Bash(*credential*rotate*)",
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(*/secrets/**)",
+      "Read(*/.aws/**)",
+      "Read(*id_rsa*)",
+      "Edit(.env)",
+      "Edit(.env.*)"
+    ],
+    "ask": [
+      "Bash(git push*)",
+      "Bash(terraform apply*)",
+      "Bash(terraform destroy*)",
+      "Bash(kubectl delete*)",
+      "Bash(kubectl apply*)",
+      "Bash(npm publish*)",
+      "Bash(*delete*)",
+      "Bash(*--force*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/verify-settings.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/check-destructive.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/log-tool-call.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
