@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 # SessionStart hook.
 #
-# Controleert bij elke sessiestart of een project-level .claude/settings.json
-# of .claude/settings.local.json een allow-regel bevat die een globale
-# deny-regel uit ~/.claude/settings.json kan verzwakken. De patronen komen
-# runtime uit deny-regex.py, dus dit script onderhoudt zelf geen kopie meer
-# van de deny-lijst: een uitbreiding tijdens een intake (0.4) werkt hier
-# automatisch door.
+# Checks at the start of every session whether a project-level
+# .claude/settings.json or .claude/settings.local.json contains an allow
+# rule that could weaken a global deny rule from ~/.claude/settings.json.
+# Patterns come from deny-regex.py at runtime, so this script no longer
+# keeps its own copy of the deny list: an addition made during an intake
+# (0.4) reaches this check automatically.
 #
-# Kanttekening: een hook kan het interactieve /status-commando niet zelf
-# aanroepen. Dit script is het dichtstbijzijnde technische alternatief; /status
-# blijft de manuele check na elke wijziging aan een settings-bestand, zie A7
-# in CLAUDE.md.
+# Known limit: a hook cannot invoke the interactive /status command itself.
+# This script is the closest technical alternative; /status remains the
+# manual check to run after editing any settings file, see A7 in CLAUDE.md.
 
 set -euo pipefail
 
@@ -48,7 +47,7 @@ except Exception:
 
   for PATTERN in "${DENY_PATTERNS[@]}"; do
     if echo "$ALLOW_BLOCK" | grep -qiE "$PATTERN"; then
-      WARNINGS+=("$FILE bevat een allow-regel die matcht met deny-patroon '$PATTERN' uit ~/.claude/settings.json.")
+      WARNINGS+=("$FILE contains an allow rule matching deny pattern '$PATTERN' from ~/.claude/settings.json.")
     fi
   done
 }
@@ -57,22 +56,22 @@ check_file_for_overrides "$(pwd)/.claude/settings.json"
 check_file_for_overrides "$(pwd)/.claude/settings.local.json"
 
 if [ ! -f "$HOME/.claude/settings.json" ]; then
-  WARNINGS+=("~/.claude/settings.json ontbreekt: de globale deny/ask-regels en hooks zijn niet actief in deze sessie.")
+  WARNINGS+=("~/.claude/settings.json is missing: the global deny/ask rules and hooks are not active in this session.")
 fi
 
 if [ ${#WARNINGS[@]} -gt 0 ]; then
   {
-    echo "$(date -Iseconds) sessie in $(pwd)"
+    echo "$(date -Iseconds) session in $(pwd)"
     for W in "${WARNINGS[@]}"; do
       echo "  - $W"
     done
   } >> "$WARN_LOG"
 
-  echo "LET OP, mogelijke verzwakking van de guardrails in deze sessie:"
+  echo "WARNING, possible weakening of the guardrails in this session:"
   for W in "${WARNINGS[@]}"; do
     echo "- $W"
   done
-  echo "Controleer dit met /status (regel 'Setting sources') voordat je destructieve of gevoelige acties uitvoert, en meld het expliciet aan de gebruiker als een override actief blijkt."
+  echo "Verify this with /status (the 'Setting sources' line) before performing any destructive or sensitive action, and tell the user explicitly if an override turns out to be active."
 fi
 
 exit 0

@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Enige bron van waarheid voor "risicovolle patronen" is permissions.deny in
-~/.claude/settings.json. Dit script leest die lijst uit en zet elke regel om
-in een regex-fragment: de tool-prefix (Bash(...), Read(...), Edit(...)) wordt
-gestript, de rest wordt regex-escaped, en '*' wordt '.*'.
+The single source of truth for "risky patterns" is permissions.deny in
+~/.claude/settings.json. This script reads that list and turns each rule
+into a regex fragment: the tool prefix (Bash(...), Read(...), Edit(...)) is
+stripped, the rest is regex-escaped, and '*' becomes '.*'.
 
-Gebruikt door check-destructive.sh en verify-settings.sh, zodat een wijziging
-aan de deny-lijst tijdens een intake (0.4) automatisch in beide hooks
-doorwerkt. Geen van beide scripts onderhoudt nog een eigen patronenlijst.
+Used by check-destructive.sh and verify-settings.sh, so a change to the
+deny list during an intake (0.4) automatically propagates to both hooks.
+Neither script keeps its own pattern list anymore.
 
-Gebruik:
-  deny-regex.py              alle deny-regels, een regex per regel op stdout
-  deny-regex.py --tool Bash  alleen regels waarvan de tool-prefix "Bash" is
+Usage:
+  deny-regex.py              all deny rules, one regex per line on stdout
+  deny-regex.py --tool Bash  only rules whose tool prefix is "Bash"
 """
 import json
 import os
@@ -32,9 +32,9 @@ def main():
         with open(settings_path) as f:
             data = json.load(f)
     except Exception:
-        # Geen settings.json, geen crash: de aanroepende hook handelt dit
-        # zelf af (verify-settings.sh waarschuwt al apart als het bestand
-        # ontbreekt).
+        # No settings.json, no crash: the calling hook handles this itself
+        # (verify-settings.sh already warns separately when the file is
+        # missing).
         return
 
     deny = data.get("permissions", {}).get("deny", [])

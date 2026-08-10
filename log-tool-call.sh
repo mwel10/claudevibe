@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# PostToolUse hook op alle tools ("*").
-# Voldoet mechanisch aan A5 (tool-call logging): dit logt onafhankelijk van of
-# Claude in de sessie zelf netjes rapporteert wat het heeft uitgevoerd.
+# PostToolUse hook on all tools ("*").
+# Fulfils A5 (tool-call logging) mechanically: this logs independent of
+# whether Claude accurately reports what it did within the session itself.
 
 set -euo pipefail
 
