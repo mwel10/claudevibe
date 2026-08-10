@@ -10,6 +10,12 @@
 > mkdir -p ~/.claude
 > curl -o ~/.claude/CLAUDE.md https://raw.githubusercontent.com/mwel10/claudevibe/main/global-CLAUDE.md
 > ```
+>
+> This file is advisory: Claude reads it and follows it as intent. The
+> enforceable half of Part A — permissions and hooks that run regardless of
+> what a session decides — ships alongside it in this repository as
+> `settings.json` and `hooks/`. See A7 below and the README for what that
+> layer does and how to install it.
 
 These instructions apply to every Claude session, in every project. I develop
 on my own, so there is no team to catch mistakes downstream — treat Claude as
@@ -107,7 +113,9 @@ Ask a block only when its trigger fired in Round 1.
 Always ask, regardless of triggers, before the first agent-driven change:
 
 - **Destructive actions.** Beyond the default list in A2, which operations
-  count as destructive *in this project specifically*?
+  count as destructive *in this project specifically*? Add anything named
+  here to the `permissions.deny` list in `~/.claude/settings.json` (see A7)
+  as well as to this file, so the answer is enforced and not only recorded.
 - **Approval gate.** Is there a gate in front of those actions, and is it
   technically enforced — a protected branch, a required review, a permission
   boundary — rather than only an instruction in this file?
@@ -195,7 +203,9 @@ shape:
   before executing, even if an earlier instruction seemed to authorise it:
   delete, drop, or truncate operations; force-push; infrastructure API calls
   that remove or stop resources; credential rotation; bulk file deletion.
-- Add anything I named as destructive during the intake (0.4) to that list.
+- Add anything I named as destructive during the intake (0.4) to that list —
+  and to `permissions.deny` in `~/.claude/settings.json`, so the addition is
+  enforced by the hooks in A7, not only written down here.
 - An earlier "go ahead" in the session does not automatically cover a new
   destructive action that follows from it — ask again.
 - If a task appears to require a destructive action that was not explicitly
@@ -225,6 +235,8 @@ shape:
 
 - Every tool call that modifies files, runs commands, or calls external APIs
   must be visible and traceable — not just the final result shown in chat.
+  The `log-tool-call.sh` hook in A7 does this mechanically, independent of
+  whether a session summarises its own actions accurately.
 
 ## A6. Ask proactively
 
@@ -232,6 +244,55 @@ When starting a new project, a new agent or subagent, or a new tool or MCP
 integration, run the relevant part of the intake in Part 0 before proceeding,
 unless it is already answered in the project addendum or earlier in the
 session.
+
+## A7. Mechanical layer alongside this file
+
+This file is advisory: it describes what Claude should do, but does not
+enforce anything by itself. The enforceable half of Part A lives in
+`~/.claude/settings.json` and the hooks in `~/.claude/hooks/`, shipped
+alongside this file in the same repository:
+
+- **Permissions (`deny`/`ask`)** — covers A1 and A2 at the tool-call level:
+  git force-push, destructive database operations, and reading `.env` or a
+  secrets directory are blocked or require confirmation, regardless of what
+  was agreed earlier in the conversation.
+- **`check-destructive.sh`** (PreToolUse on Bash) — a backstop that enforces
+  the Bash deny rules from `settings.json` at the pattern level, not on
+  interpretation.
+- **`log-tool-call.sh`** (PostToolUse, every tool) — fulfils A5: every tool
+  call is logged to `~/.claude/logs/tool-calls.log`, independent of whether
+  Claude summarises it accurately in the session itself.
+- **`verify-settings.sh`** (SessionStart) — checks at the start of every
+  session whether a project-level `.claude/settings.json` or
+  `.claude/settings.local.json` contains an allow rule that could weaken a
+  global deny rule, and raises an active warning in the session if so.
+- **`hooks/lib/deny-regex.py`** — the single source of the patterns above.
+  Both hooks derive their patterns from `permissions.deny` in `settings.json`
+  at runtime; neither keeps its own copy. Adding a deny rule during an
+  intake (0.4) therefore reaches both the block and the warning
+  automatically, without editing the hooks themselves.
+
+**Known limit of this layer.** A hook cannot invoke the interactive `/status`
+command; that stays a manual step. Run `/status` and check the "Setting
+sources" line:
+
+- right after editing `~/.claude/settings.json` or a project-level settings
+  file, to confirm the change actually loaded;
+- whenever `verify-settings.sh` shows a warning at session start, to see
+  exactly which sources are active and which one causes the overlap;
+- at the start of a project whose `.claude/` directory you didn't create
+  yourself.
+
+If `/status` shows a source that `verify-settings.sh` didn't warn about, or a
+deny rule turns out to be ignored anyway, say so explicitly rather than
+assuming the guardrail is working.
+
+**What this layer doesn't cover.** A deny rule on `Read`/`Edit` stops
+Claude's own file tools, but not a subprocess (a Python or Node script that
+opens the file directly). For projects where that risk matters, OS-level
+file permissions or sandboxing are needed in addition to this rule, not
+instead of it. Record that under "Credentials and where secrets come from"
+in the project addendum (0.6) when it applies.
 
 ---
 
@@ -440,4 +501,5 @@ Close every substantial code delivery with a short security note covering:
 
 CIS Controls v8 §16.1–16.14 (Implementation Group 3), and NIST CSF PR.PS-06
 and ID.AM-08. Supporting references: OWASP ASVS, OWASP Top 10, NIST SP 800-61
-Rev. 3, CycloneDX ML-BOM (AIBOM).
+Rev. 3, CycloneDX ML-BOM (AIBOM), Claude Code permissions and hooks
+reference (code.claude.com/docs).
