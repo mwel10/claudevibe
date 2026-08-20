@@ -127,7 +127,7 @@ sources are actually active after an edit stays a manual step.
 Worth writing down, because the failure is more instructive than the fix.
 
 The hook scripts used to sit in the root of this repository, while the install
-instructions above downloaded them from `hooks/`. Those URLs returned 404. The
+instructions below downloaded them from `hooks/`. Those URLs returned 404. The
 command was `curl -o` without `--fail`, so curl wrote the response body —
 the fourteen characters `404: Not Found` — into each hook file and exited
 successfully. The files existed. They were executable. They were the right
@@ -143,7 +143,7 @@ warning me that the hooks were broken. The `permissions.deny` rules in
 itself, so the damage was bounded. The layer built to back them up was not
 there.
 
-Three things were wrong, and all three had to be fixed:
+Four things were wrong, and all four had to be fixed:
 
 - **The paths.** The scripts now live at `hooks/` and `hooks/lib/`, matching
   the documented URLs.
@@ -156,6 +156,15 @@ Three things were wrong, and all three had to be fixed:
   derived? It also no longer aborts on an empty pattern array under bash 3.2,
   which is what macOS ships and which had been making the script exit
   silently before it printed anything.
+- **The missing proof.** There was no way to ask "is this working" and get an
+  answer based on behaviour. `hooks/self-test.sh` is that answer: it feeds a
+  destructive command and a harmless one to the hook and checks that the first
+  is blocked and the second is not. Presence was the only thing ever verified,
+  and presence was exactly what the broken install had.
+
+`check-destructive.sh` also fails closed now. If it cannot derive its patterns
+it blocks and says so, instead of the earlier behaviour of exiting nonzero in a
+way Claude Code read as approval.
 
 The general lesson, and the reason A8 of `global-CLAUDE.md` exists: a control
 that cannot detect its own absence is not a control. Test that a guardrail
