@@ -296,6 +296,12 @@ alongside this file in the same repository:
   warn about it was one of the broken files. If this check produces output,
   treat the mechanical layer as absent until it is fixed, and tell me before
   doing anything destructive or sensitive.
+- **`self-test.sh`** — not a hook, but the check that the hooks are real.
+  Run `bash ~/.claude/hooks/self-test.sh` after installing or after editing
+  `settings.json`. It verifies that a destructive command is actually blocked
+  and a harmless one is not, rather than that the files exist. If I ask
+  whether the guardrail is working, run this and report what it says instead
+  of inferring it from the presence of the files.
 - **`hooks/lib/deny-regex.py`** — the single source of the patterns above.
   Both hooks derive their patterns from `permissions.deny` in `settings.json`
   at runtime; neither keeps its own copy. Adding a deny rule during an
