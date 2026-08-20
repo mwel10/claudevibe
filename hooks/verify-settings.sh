@@ -48,6 +48,12 @@ for HOOK in check-destructive.sh log-tool-call.sh verify-settings.sh; do
   fi
 done
 
+if [ ! -f "$HOME/.claude/CLAUDE.md" ]; then
+  WARNINGS+=("$HOME/.claude/CLAUDE.md is missing: the instruction layer is not loaded in this session.")
+elif head -c 200 "$HOME/.claude/CLAUDE.md" | grep -qiE '404|not found|<html'; then
+  WARNINGS+=("$HOME/.claude/CLAUDE.md looks like a downloaded error page rather than the instructions. Reinstall it with 'curl --fail'.")
+fi
+
 if [ ! -f "$LIB" ]; then
   WARNINGS+=("$LIB is missing: check-destructive.sh cannot derive its patterns and will block every Bash call until this is fixed.")
 fi

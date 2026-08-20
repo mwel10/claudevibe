@@ -102,6 +102,9 @@ conversation says:
   `.claude/settings.local.json` contains an `allow` rule that could weaken
   one of the global `deny` rules, and raises an active warning in the
   session if so.
+- **`hooks/self-test.sh`** — not a hook, but the thing that tells you the
+  hooks are real. Run it by hand: it checks the install and then verifies that
+  a destructive command is actually blocked and a harmless one is not.
 - **`hooks/lib/deny-regex.py`** — the single source of the patterns the two
   hooks above use. Both derive their patterns from `permissions.deny` in
   `settings.json` at runtime rather than keeping their own copy, so adding a
@@ -160,36 +163,76 @@ blocks something, not that its file is present.
 
 ## Installation
 
-Note the `--fail`. It is not decoration: see "When the guardrail was broken"
-below for what happens without it.
+Every `curl` below uses `--fail`. That is not decoration. Without it, curl
+writes the body of an HTTP error into the target file and exits successfully,
+which is how this repository once shipped four hook scripts that each
+contained the words `404: Not Found` and did nothing at all. See "When the
+guardrail was broken" for the full account.
 
 ```bash
-set -e
-mkdir -p ~/.claude/hooks/lib
 BASE=https://raw.githubusercontent.com/mwel10/claudevibe/main
-curl --fail -sSL -o ~/.claude/CLAUDE.md                      $BASE/global-CLAUDE.md
-curl --fail -sSL -o ~/.claude/settings.json                  $BASE/settings.json
-curl --fail -sSL -o ~/.claude/hooks/check-destructive.sh     $BASE/hooks/check-destructive.sh
-curl --fail -sSL -o ~/.claude/hooks/log-tool-call.sh         $BASE/hooks/log-tool-call.sh
-curl --fail -sSL -o ~/.claude/hooks/verify-settings.sh       $BASE/hooks/verify-settings.sh
-curl --fail -sSL -o ~/.claude/hooks/lib/deny-regex.py        $BASE/hooks/lib/deny-regex.py
+mkdir -p ~/.claude/hooks/lib
+curl --fail -sSL -o ~/.claude/CLAUDE.md                  "$BASE/global-CLAUDE.md"
+curl --fail -sSL -o ~/.claude/settings.json              "$BASE/settings.json"
+curl --fail -sSL -o ~/.claude/hooks/check-destructive.sh "$BASE/hooks/check-destructive.sh"
+curl --fail -sSL -o ~/.claude/hooks/log-tool-call.sh     "$BASE/hooks/log-tool-call.sh"
+curl --fail -sSL -o ~/.claude/hooks/verify-settings.sh   "$BASE/hooks/verify-settings.sh"
+curl --fail -sSL -o ~/.claude/hooks/self-test.sh         "$BASE/hooks/self-test.sh"
+curl --fail -sSL -o ~/.claude/hooks/lib/deny-regex.py    "$BASE/hooks/lib/deny-regex.py"
 chmod +x ~/.claude/hooks/*.sh
 ```
 
-Then check that the guardrail actually works, rather than that the files
-merely exist:
+There is deliberately no `set -e` there, so that pasting it into a terminal
+cannot leave your shell in a state where the next failing command closes it.
+Each line stands alone, `--fail` stops any of them writing a file on an HTTP
+error, `-sS` prints the error if one occurs, and the next step catches
+anything that did not arrive.
+
+Then prove it works, rather than checking that the files are there:
 
 ```bash
-bash ~/.claude/hooks/verify-settings.sh
+bash ~/.claude/hooks/self-test.sh
 ```
 
-Silence means the install is intact. Any output names what is wrong. Run it
-again after editing `settings.json`, and alongside `/status` in a Claude Code
-session to confirm which setting sources are active.
+That is the step that matters, and it is the one this repository previously
+did not have. It checks that each installed file is a real file rather than a
+downloaded error page, that the hooks are executable, that the deny patterns
+still derive from `settings.json`, and then it feeds a destructive command and
+a harmless command to the hook and confirms that the first is blocked and the
+second is not.
+
+Both halves of that last check are needed. `check-destructive.sh` now fails
+closed, so a completely broken install blocks *everything*; a test that only
+asked "did it block something" would pass on exactly the install you most need
+to catch. The guardrail has to discriminate, so the self-test checks that it
+does.
+
+It ends with `All 14 checks passed` or a list of what is wrong, and exits
+nonzero on failure so you can put it in a shell profile or a cron job. Run it
+after installing, after editing `settings.json`, and alongside `/status` in a
+Claude Code session to confirm which setting sources are active.
 
 Adjust the paths if you lay the repository out differently — what matters is
 that `settings.json` lands at `~/.claude/settings.json` and the hook scripts
 stay executable at the paths `settings.json` points to.
+
+### Upgrading from a broken install
+
+Your hooks are almost certainly inert. Check with one command:
+
+```bash
+head -c 20 ~/.claude/hooks/check-destructive.sh
+```
+
+If that prints `404: Not Found`, every hook is a stub, nothing has been
+blocked or logged since you installed, and `~/.claude/logs/` probably does not
+exist. Re-run the install commands above, which overwrite the stubs, then run
+`bash ~/.claude/hooks/self-test.sh` and confirm it reports all checks passed.
+
+Your `permissions.deny` rules in `settings.json` were unaffected throughout,
+because Claude Code enforces those itself rather than through a hook. What was
+missing is the backstop, the tool-call log, and the warning that any of it was
+missing.
 
 The rename of `global-CLAUDE.md` to `CLAUDE.md` is deliberate. Two levels are
 in play: the global file applies everywhere, and each project also gets its
