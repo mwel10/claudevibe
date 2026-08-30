@@ -392,12 +392,37 @@ A9 asks Claude to say out loud when it decides not to delegate, since a step
 silently skipped and a step correctly judged unnecessary otherwise look
 identical.
 
-Two things the gate specifically does not prove. A receipt says a subagent ran,
-not that it ran well: an agent that reads nothing and reports nothing leaves the
-same receipt as one that did the work, which is why its answer is stored in the
-receipt and why the review still has to be read. And the gate watches Claude
-Code's own `Edit` and `Write`, so a file changed in another editor, or written
-by a script the session started, goes past it untouched.
+A receipt also does not prove much on its own. It says a subagent ran, not that
+it ran well: an agent that reads nothing and reports nothing leaves the same
+receipt as one that did the work, which is why its answer is stored in the
+receipt and why the review still has to be read.
+
+### The boundary every hook shares
+
+This is the limit worth understanding before trusting any of it, because it
+applies to the deny rules, the destructive-command backstop, the tool-call log
+and the intake gate alike. **Hooks only see what goes through Claude Code.**
+
+A hook fires on a tool call. Anything that isn't one is invisible to the whole
+layer. Edit a file in your IDE and no intake gate runs. Commit from a second
+terminal tab, or from your editor's git panel, and nothing inspects that commit.
+Run a script from a shell you opened yourself and every command inside it is
+past the destructive-command check before it starts, because Claude Code never
+saw it. Even inside a session, a shell script that Claude starts is one tool
+call: what the script then does to your files and your repository is its own
+business, and the log records the invocation rather than the consequences.
+
+None of that is a bug to be fixed. It is the shape of the mechanism. A hook is
+an interceptor on one program's tool calls, so it can only ever cover the work
+that flows through that program.
+
+Two things follow. Treat the layer as a floor under work done with Claude Code,
+not as a property of your repository: the same repository edited by hand has
+none of these guarantees, and the receipts, warnings and logs will quietly say
+nothing rather than say so. And when it matters that a rule holds regardless of
+who or what is acting, put it where the rule lives for everyone, in a pre-commit
+hook, in branch protection, in CI, or in file permissions. Those see the commit
+from the IDE. This layer never will.
 
 It also isn't a substitute for someone who knows what they're doing looking
 at your code. It raises the floor. It doesn't replace the ceiling.

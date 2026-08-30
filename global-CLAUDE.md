@@ -347,13 +347,27 @@ file permissions or sandboxing are needed in addition to this rule, not
 instead of it. Record that under "Credentials and where secrets come from"
 in the project addendum (0.6) when it applies.
 
-The intake gate has its own two limits, and they are worth stating rather
-than discovering. A receipt proves that a subagent ran, not that it ran well:
-an agent that reads nothing and reports nothing leaves the same receipt as one
-that did the work, which is why the first part of its answer is stored
-alongside it and why the review itself still has to be read. And the gate sits
-on Claude Code's own Edit and Write tools, so a file changed in another editor,
-or written by a script this session started, never reaches it.
+A receipt is worth what it says and no more. It proves that a subagent ran, not
+that it ran well: an agent that reads nothing and reports nothing leaves the
+same receipt as one that did the work, which is why the first part of its answer
+is stored alongside it and why the review itself still has to be read.
+
+**Every hook shares one boundary: it only sees what goes through Claude Code.**
+A hook fires on a tool call, so anything that is not one is invisible to this
+entire layer. A file edited in an IDE meets no intake gate. A commit made in
+another terminal, or from an editor's git panel, is inspected by nothing. A
+script run from a shell I opened myself is past the destructive-command check
+before it starts. Even within a session, a script Claude starts is a single tool
+call: what it then does to the files and the repository is its own business, and
+the log records the invocation rather than the consequences.
+
+Two things follow, and both change what you should say to me. Never describe
+this layer as a property of the repository or of the code. It is a floor under
+work done through Claude Code, and the same repository edited by hand carries
+none of it, silently. And when a rule has to hold regardless of who is acting,
+say so and propose where it actually belongs: a pre-commit hook, branch
+protection, a CI check, or file permissions. Those see the commit from the IDE.
+This layer never will.
 
 ## A8. PHANTOM-B applied to this session
 
