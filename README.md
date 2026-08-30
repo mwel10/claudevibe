@@ -99,6 +99,12 @@ conversation says:
 - **`hooks/log-tool-call.sh`** (`PostToolUse`, every tool) — logs every tool
   call to `~/.claude/logs/tool-calls.log`, so there is a record even if a
   session's own summary of what it did is incomplete.
+- **`hooks/record-agent-run.sh`** (`SubagentStop`) — writes a receipt when one
+  of the subagents finishes: which agent, which project, which commit, and a
+  hash of `git diff HEAD`. That last field is what makes a receipt evidence
+  rather than a sticker, since it stops matching the moment the code changes.
+- **`hooks/require-intake.sh`** (`PreToolUse` and `PostToolUse` on `Edit` and
+  `Write`) — turns the intake into a precondition for writing code. See below.
 - **`hooks/verify-settings.sh`** (`SessionStart`) — checks, at the start of
   every session, whether a project's own `.claude/settings.json` or
   `.claude/settings.local.json` contains an `allow` rule that could weaken
@@ -157,6 +163,39 @@ them may set `permissionMode` to `bypassPermissions` or `dontAsk`.
 `.claude/agents/` as well as the shared set, because a repository can ship a
 definition that silently overrides one of mine — the same override problem the
 hook already watches for in `settings.json`.
+
+### Gating the one step I actually forget
+
+Having the agents available doesn't make them run. You can't force a language
+model to call a tool, so the move is the same one the over-reliance prompt
+describes: stop trying to steer the choice, and make the outcome unreachable
+without evidence that the choice was made.
+
+That is what the intake gate does. `record-agent-run.sh` writes a receipt every
+time a subagent finishes. `require-intake.sh` sits on `Edit` and `Write`, and
+when the project has neither a `## Project addendum: security scope` nor an
+`intake-scout` receipt, it turns the first write into a permission prompt with
+the reason attached. The intake stops being a habit and becomes a condition for
+writing code in that directory.
+
+It asks rather than blocks, deliberately. A block invites a session to route
+around it, and the session is the party least able to judge whether skipping the
+intake is fine this once. A prompt can't be answered by the session at all — it
+lands with me, which is where the approval gate in 0.4 was always supposed to
+sit. Two things are never gated, or the gate would eat itself: the project's own
+`CLAUDE.md`, since writing the addendum is the way out, and anything outside the
+project directory. One approval quiets it for that session; the written addendum
+quiets it permanently.
+
+Building it turned up the failure mode this repository is named for. On macOS,
+`/tmp` and `/var` are symlinks, so the file path arriving at the hook and the
+project path coming back from `git rev-parse --show-toplevel` disagreed, the
+"is this file inside the project" test never matched, and the gate silently
+allowed everything. It looked installed. It was inert. The probe that caught it
+is now five checks inside `self-test.sh`, and like the destructive-command
+check they test both directions: the gate has to ask without an addendum *and*
+stay quiet with one, because a hook that asks about everything and a hook that
+asks about nothing are equally useless and only one of them is obvious.
 
 ### When the guardrail was broken
 
@@ -222,6 +261,8 @@ curl --fail -sSL -o ~/.claude/settings.json              "$BASE/settings.json"
 curl --fail -sSL -o ~/.claude/hooks/check-destructive.sh "$BASE/hooks/check-destructive.sh"
 curl --fail -sSL -o ~/.claude/hooks/log-tool-call.sh     "$BASE/hooks/log-tool-call.sh"
 curl --fail -sSL -o ~/.claude/hooks/verify-settings.sh   "$BASE/hooks/verify-settings.sh"
+curl --fail -sSL -o ~/.claude/hooks/require-intake.sh    "$BASE/hooks/require-intake.sh"
+curl --fail -sSL -o ~/.claude/hooks/record-agent-run.sh  "$BASE/hooks/record-agent-run.sh"
 curl --fail -sSL -o ~/.claude/hooks/self-test.sh         "$BASE/hooks/self-test.sh"
 curl --fail -sSL -o ~/.claude/hooks/lib/deny-regex.py    "$BASE/hooks/lib/deny-regex.py"
 for A in intake-scout threat-modeller security-reviewer dependency-checker untrusted-reader; do
@@ -248,7 +289,8 @@ downloaded error page, that the hooks are executable, that the deny patterns
 still derive from `settings.json`, that the subagent definitions are installed
 and none of them bypasses the permission prompts, and then it feeds a
 destructive command and a harmless command to the hook and confirms that the
-first is blocked and the second is not.
+first is blocked and the second is not. It does the same in both directions for
+the intake gate, in a redirected `HOME` so it never touches real receipts.
 
 Both halves of that last check are needed. `check-destructive.sh` now fails
 closed, so a completely broken install blocks *everything*; a test that only
@@ -330,14 +372,22 @@ file a deny rule was meant to protect, and it can't check its own settings
 sources without a manual `/status`.
 
 The subagents have the same shape of limit, and it's worth being precise about
-where it falls. What is mechanical is that the definitions exist, that each one
-is a real file, and that none of them can skip a permission prompt — all three
-checked at every session start. What is not mechanical is that a subagent
-actually gets invoked. The trigger table in A9 is an instruction like the rest
-of `CLAUDE.md`, so it makes the intake and the review the default path rather
-than a guaranteed one. That's also why A9 asks Claude to say out loud when it
-decides not to delegate, since a step silently skipped and a step correctly
-judged unnecessary otherwise look identical.
+where it now falls, because the intake gate moved it. What is mechanical: the
+definitions exist and are real files, none of them can skip a permission prompt,
+a finished subagent leaves a receipt, and the Part 0 intake is a condition for
+writing code in a project. What is not: the other four agents. Nothing makes the
+security review, the threat model or the dependency check happen — those rows in
+the A9 trigger table are instructions like the rest of `CLAUDE.md`. That's why
+A9 asks Claude to say out loud when it decides not to delegate, since a step
+silently skipped and a step correctly judged unnecessary otherwise look
+identical.
+
+Two things the gate specifically does not prove. A receipt says a subagent ran,
+not that it ran well: an agent that reads nothing and reports nothing leaves the
+same receipt as one that did the work, which is why its answer is stored in the
+receipt and why the review still has to be read. And the gate watches Claude
+Code's own `Edit` and `Write`, so a file changed in another editor, or written
+by a script the session started, goes past it untouched.
 
 It also isn't a substitute for someone who knows what they're doing looking
 at your code. It raises the floor. It doesn't replace the ceiling.

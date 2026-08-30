@@ -47,6 +47,15 @@
             "command": "$HOME/.claude/hooks/check-destructive.sh"
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/require-intake.sh"
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -56,6 +65,25 @@
           {
             "type": "command",
             "command": "$HOME/.claude/hooks/log-tool-call.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/require-intake.sh"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/record-agent-run.sh"
           }
         ]
       }

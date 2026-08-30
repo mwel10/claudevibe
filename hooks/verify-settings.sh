@@ -37,7 +37,8 @@ WARNINGS=()
 
 # --- 1. Is the guardrail itself intact? --------------------------------------
 
-for HOOK in check-destructive.sh log-tool-call.sh verify-settings.sh; do
+for HOOK in check-destructive.sh log-tool-call.sh verify-settings.sh \
+            require-intake.sh record-agent-run.sh; do
   F="$HOOK_DIR/$HOOK"
   if [ ! -f "$F" ]; then
     WARNINGS+=("$F is missing: that part of the guardrail is not running.")

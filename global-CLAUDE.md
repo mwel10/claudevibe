@@ -287,6 +287,15 @@ alongside this file in the same repository:
 - **`log-tool-call.sh`** (PostToolUse, every tool) — fulfils A5: every tool
   call is logged to `~/.claude/logs/tool-calls.log`, independent of whether
   Claude summarises it accurately in the session itself.
+- **`record-agent-run.sh`** (SubagentStop) — writes a receipt whenever one of
+  the A9 subagents finishes: which agent, in which project, at which commit,
+  and against which working tree. The tree fingerprint is the point. A
+  receipt that records only a time says a review happened once, which stops
+  being true the moment a line changes; a receipt bound to `git diff HEAD`
+  expires by itself. Receipts land in `~/.claude/logs/agent-receipts/`.
+- **`require-intake.sh`** (PreToolUse and PostToolUse on Edit and Write) —
+  turns the Part 0 intake from an instruction into a condition, as described
+  at the end of A9.
 - **`verify-settings.sh`** (SessionStart) — checks at the start of every
   session whether a project-level `.claude/settings.json` or
   `.claude/settings.local.json` contains an allow rule that could weaken a
@@ -337,6 +346,14 @@ opens the file directly). For projects where that risk matters, OS-level
 file permissions or sandboxing are needed in addition to this rule, not
 instead of it. Record that under "Credentials and where secrets come from"
 in the project addendum (0.6) when it applies.
+
+The intake gate has its own two limits, and they are worth stating rather
+than discovering. A receipt proves that a subagent ran, not that it ran well:
+an agent that reads nothing and reports nothing leaves the same receipt as one
+that did the work, which is why the first part of its answer is stored
+alongside it and why the review itself still has to be read. And the gate sits
+on Claude Code's own Edit and Write tools, so a file changed in another editor,
+or written by a script this session started, never reaches it.
 
 ## A8. PHANTOM-B applied to this session
 
@@ -434,6 +451,31 @@ quietly left out is indistinguishable from one that was never needed.
   use in the project addendum (0.6). Where a subagent runs a different model
   through its `model:` field, that model belongs in the build-time AIBOM (B12)
   as well.
+
+**The intake is gated, not merely expected.** The first `Edit` or `Write` in a
+project that has neither a `## Project addendum: security scope` nor an
+`intake-scout` receipt turns into a permission prompt, with the reason
+attached, so the decision reaches me instead of being forgotten. Three things
+about how that is built matter for how you behave around it.
+
+It asks rather than blocks, on purpose. A block invites a session to look for a
+route around it, and the session is the party least able to judge whether
+skipping the intake is fine this once. A prompt cannot be answered by the
+session at all. Do not try to satisfy the gate by another route: writing the
+file through a shell command instead of `Write`, or creating an empty addendum
+heading to make the check pass, defeats the only control that makes the intake
+reliable. If the gate fires, run `intake-scout` and write the addendum, or say
+plainly that you are asking me to wave it through and why.
+
+Two things are deliberately never gated: the project's own `CLAUDE.md`, because
+writing the addendum is the way out, and anything outside the project
+directory. Once I approve one write, the gate stays quiet for the rest of that
+session in that project, and once the addendum exists it stays quiet
+permanently.
+
+If the prompt says the gate could not read its own input, treat the mechanical
+layer as suspect and tell me before continuing, the same as for any warning
+from `verify-settings.sh` under A7.
 
 ---
 
