@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SessionStart hook.
 #
-# Two jobs.
+# Three jobs.
 #
 # 1. Check whether a project-level .claude/settings.json or
 #    .claude/settings.local.json contains an allow rule that could weaken a
@@ -15,6 +15,12 @@
 #    each hook. The hooks stayed present, executable, and completely inert for
 #    weeks. A guardrail that cannot detect its own absence is not a guardrail,
 #    so that case is now checked explicitly at every session start.
+#
+# 3. Check the subagent definitions A9 relies on: that the shared set in
+#    ~/.claude/agents is installed at all, and that no definition, user-level
+#    or project-level, gives itself a permission mode that cannot ask before a
+#    destructive action. A subagent's tool scope lives in its own frontmatter
+#    rather than in settings.json, so nothing else looks at it.
 #
 # Known limit: a hook cannot invoke the interactive /status command itself.
 # This script is the closest technical alternative; /status remains the
@@ -107,6 +113,33 @@ check_file_for_overrides "$(pwd)/.claude/settings.local.json"
 if [ ! -f "$HOME/.claude/settings.json" ]; then
   WARNINGS+=("~/.claude/settings.json is missing: the global deny/ask rules and hooks are not active in this session.")
 fi
+
+# --- 3. Are the subagent definitions present and sound? -----------------------
+#
+# A9 makes subagents the default way of working, and a subagent's tool scope
+# lives in its own frontmatter rather than in settings.json. Two things are
+# worth catching at session start: the shared definitions silently not being
+# installed, and a definition that hands itself a permission mode nothing can
+# interrupt. A project-level file wins over a user-level one with the same
+# name, so both directories are checked.
+
+if [ ! -d "$HOME/.claude/agents" ]; then
+  WARNINGS+=("$HOME/.claude/agents is missing: the shared subagent definitions from A9 are not available in this session.")
+fi
+
+for DIR in "$HOME/.claude/agents" "$(pwd)/.claude/agents"; do
+  [ -d "$DIR" ] || continue
+  for F in "$DIR"/*.md; do
+    [ -f "$F" ] || continue
+    if head -c 200 "$F" | grep -qiE '404|not found|<html'; then
+      WARNINGS+=("$F looks like a downloaded error page rather than a subagent definition. Reinstall it with 'curl --fail'.")
+      continue
+    fi
+    if grep -qE '^permissionMode:[[:space:]]*(bypassPermissions|dontAsk)' "$F"; then
+      WARNINGS+=("$F sets permissionMode to bypassPermissions or dontAsk, which A9 forbids: that subagent cannot ask before a destructive action.")
+    fi
+  done
+done
 
 if [ ${#WARNINGS[@]} -gt 0 ]; then
   {

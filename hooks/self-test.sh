@@ -73,6 +73,23 @@ else
   bad "the hook itself did not run (exit $ALLOWED). It is not a working script, so nothing is being checked at all."
 fi
 
+echo "Subagents"
+# A9: the shared definitions are what makes the intake, threat model, review
+# and dependency check available in a new project without setting anything up.
+# A missing directory is the failure mode that looks like nothing at all.
+if [ -d "$CLAUDE_DIR/agents" ]; then
+  N=$(ls -1 "$CLAUDE_DIR/agents"/*.md 2>/dev/null | grep -c . || true)
+  if [ "${N:-0}" -gt 0 ]; then ok "$N subagent definitions in ~/.claude/agents"
+  else bad "~/.claude/agents exists but holds no .md definitions"; fi
+  if grep -rlE '^permissionMode:[[:space:]]*(bypassPermissions|dontAsk)' "$CLAUDE_DIR/agents" >/dev/null 2>&1; then
+    bad "a subagent definition sets permissionMode to bypassPermissions or dontAsk, which A9 forbids"
+  else
+    ok "no subagent definition bypasses the permission prompts"
+  fi
+else
+  bad "~/.claude/agents is missing, the shared subagent definitions are not installed"
+fi
+
 echo "Session-start check"
 OUT=$(bash "$HOOK_DIR/verify-settings.sh" 2>&1 || true)
 if [ -z "$OUT" ]; then ok "verify-settings.sh reports no warnings"
