@@ -150,6 +150,42 @@ else
   bad "no receipt was written for a finished subagent, so no gate can be satisfied by evidence"
 fi
 
+echo "Hook registration"
+# Updating deliberately leaves settings.json alone, because that file carries
+# the deny rules added during project intakes (0.4, A2) and overwriting it
+# would delete them. The cost of that choice is this failure mode: a hook added
+# by a later release arrives as a file with nothing wiring it in, and a hook
+# Claude Code was never told to run is exactly as inert as a 404 stub. Every
+# other check here runs the hooks directly, so this is the only one that would
+# notice.
+REGISTERED=$(python3 -c "
+import json, sys
+try:
+    data = json.load(open('$CLAUDE_DIR/settings.json'))
+except Exception:
+    sys.exit(0)
+for entries in (data.get('hooks') or {}).values():
+    for entry in entries or []:
+        for hook in entry.get('hooks') or []:
+            if hook.get('command'):
+                print(hook['command'])
+" 2>/dev/null || true)
+
+if [ -z "$REGISTERED" ]; then
+  bad "settings.json registers no hooks at all, so none of the scripts above ever run"
+else
+  for H in check-destructive.sh log-tool-call.sh verify-settings.sh \
+           require-intake.sh record-agent-run.sh; do
+    if [ ! -f "$HOOK_DIR/$H" ]; then
+      continue
+    elif echo "$REGISTERED" | grep -q "$H"; then
+      ok "$H is registered in settings.json"
+    else
+      bad "$H is installed but not registered in settings.json, so Claude Code never runs it. Merge the 'hooks' block from the repository copy."
+    fi
+  done
+fi
+
 echo "Session-start check"
 OUT=$(bash "$HOOK_DIR/verify-settings.sh" 2>&1 || true)
 if [ -z "$OUT" ]; then ok "verify-settings.sh reports no warnings"

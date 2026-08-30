@@ -266,26 +266,41 @@ guardrail was broken" for the full account.
 ```bash
 BASE=https://raw.githubusercontent.com/mwel10/claudevibe/main
 mkdir -p ~/.claude/hooks/lib ~/.claude/agents
-curl --fail -sSL -o ~/.claude/CLAUDE.md                  "$BASE/global-CLAUDE.md"
-curl --fail -sSL -o ~/.claude/settings.json              "$BASE/settings.json"
-curl --fail -sSL -o ~/.claude/hooks/check-destructive.sh "$BASE/hooks/check-destructive.sh"
-curl --fail -sSL -o ~/.claude/hooks/log-tool-call.sh     "$BASE/hooks/log-tool-call.sh"
-curl --fail -sSL -o ~/.claude/hooks/verify-settings.sh   "$BASE/hooks/verify-settings.sh"
-curl --fail -sSL -o ~/.claude/hooks/require-intake.sh    "$BASE/hooks/require-intake.sh"
-curl --fail -sSL -o ~/.claude/hooks/record-agent-run.sh  "$BASE/hooks/record-agent-run.sh"
-curl --fail -sSL -o ~/.claude/hooks/self-test.sh         "$BASE/hooks/self-test.sh"
-curl --fail -sSL -o ~/.claude/hooks/lib/deny-regex.py    "$BASE/hooks/lib/deny-regex.py"
+curl --fail --remove-on-error -sSL -o ~/.claude/CLAUDE.md                  "$BASE/global-CLAUDE.md"
+curl --fail --remove-on-error -sSL -o ~/.claude/settings.json              "$BASE/settings.json"
+curl --fail --remove-on-error -sSL -o ~/.claude/hooks/check-destructive.sh "$BASE/hooks/check-destructive.sh"
+curl --fail --remove-on-error -sSL -o ~/.claude/hooks/log-tool-call.sh     "$BASE/hooks/log-tool-call.sh"
+curl --fail --remove-on-error -sSL -o ~/.claude/hooks/verify-settings.sh   "$BASE/hooks/verify-settings.sh"
+curl --fail --remove-on-error -sSL -o ~/.claude/hooks/require-intake.sh    "$BASE/hooks/require-intake.sh"
+curl --fail --remove-on-error -sSL -o ~/.claude/hooks/record-agent-run.sh  "$BASE/hooks/record-agent-run.sh"
+curl --fail --remove-on-error -sSL -o ~/.claude/hooks/self-test.sh         "$BASE/hooks/self-test.sh"
+curl --fail --remove-on-error -sSL -o ~/.claude/hooks/lib/deny-regex.py    "$BASE/hooks/lib/deny-regex.py"
 for A in intake-scout threat-modeller security-reviewer dependency-checker untrusted-reader; do
-  curl --fail -sSL -o ~/.claude/agents/$A.md             "$BASE/agents/$A.md"
+  curl --fail --remove-on-error -sSL -o ~/.claude/agents/$A.md             "$BASE/agents/$A.md"
 done
 chmod +x ~/.claude/hooks/*.sh
 ```
 
 There is deliberately no `set -e` there, so that pasting it into a terminal
 cannot leave your shell in a state where the next failing command closes it.
-Each line stands alone, `--fail` stops any of them writing a file on an HTTP
-error, `-sS` prints the error if one occurs, and the next step catches
-anything that did not arrive.
+Each line stands alone, `-sS` prints the error if one occurs, and the next step
+catches anything that did not arrive.
+
+The two flags in front do different jobs, and both are needed. `--fail` covers
+the case this repository already got wrong: the server answers 404, and without
+it curl writes the error body into the file and exits successfully.
+`--remove-on-error` covers the case it does not. If the server answers 200 and
+the connection dies halfway through, curl exits with an error and leaves a
+truncated file behind, which `--fail` has no opinion about. A half-written hook
+is worse than a missing one, because bash runs whatever it was given: a
+`check-destructive.sh` cut off before its pattern loop exits 0 and approves
+everything, which is the original failure wearing a different hat.
+`--remove-on-error` deletes the partial file instead.
+
+It needs curl 7.83.0 or newer, which is May 2022, so anything current has it.
+If your curl reports the option as unknown, drop it and rely on `--fail` plus
+the self-test below, which checks file sizes and actual blocking behaviour and
+would catch a truncated hook anyway.
 
 Then prove it works, rather than checking that the files are there:
 
@@ -317,6 +332,61 @@ setting sources are active.
 Adjust the paths if you lay the repository out differently — what matters is
 that `settings.json` lands at `~/.claude/settings.json` and the hook scripts
 stay executable at the paths `settings.json` points to.
+
+### Updating
+
+Everything installed above can be overwritten safely except one file.
+`~/.claude/settings.json` is the file you are supposed to have changed. Sections
+0.4 and A2 tell you to add every destructive action found during a project
+intake to its `permissions.deny` list, so on any machine that has done a few
+intakes it has drifted from the copy in this repository, deliberately. An update
+that overwrites it deletes your own rules and says nothing, and you find out
+when something gets through that you had specifically blocked.
+
+So update the instructions, the hooks and the subagent definitions, and leave
+`settings.json` out of it:
+
+```bash
+BASE=https://raw.githubusercontent.com/mwel10/claudevibe/main
+curl --fail --remove-on-error -sSL -o ~/.claude/CLAUDE.md                  "$BASE/global-CLAUDE.md"
+curl --fail --remove-on-error -sSL -o ~/.claude/hooks/check-destructive.sh "$BASE/hooks/check-destructive.sh"
+curl --fail --remove-on-error -sSL -o ~/.claude/hooks/log-tool-call.sh     "$BASE/hooks/log-tool-call.sh"
+curl --fail --remove-on-error -sSL -o ~/.claude/hooks/verify-settings.sh   "$BASE/hooks/verify-settings.sh"
+curl --fail --remove-on-error -sSL -o ~/.claude/hooks/require-intake.sh    "$BASE/hooks/require-intake.sh"
+curl --fail --remove-on-error -sSL -o ~/.claude/hooks/record-agent-run.sh  "$BASE/hooks/record-agent-run.sh"
+curl --fail --remove-on-error -sSL -o ~/.claude/hooks/self-test.sh         "$BASE/hooks/self-test.sh"
+curl --fail --remove-on-error -sSL -o ~/.claude/hooks/lib/deny-regex.py    "$BASE/hooks/lib/deny-regex.py"
+for A in intake-scout threat-modeller security-reviewer dependency-checker untrusted-reader; do
+  curl --fail --remove-on-error -sSL -o ~/.claude/agents/$A.md             "$BASE/agents/$A.md"
+done
+chmod +x ~/.claude/hooks/*.sh
+```
+
+Then read what changed in `settings.json` upstream instead of taking it:
+
+```bash
+curl --fail --remove-on-error -sSL -o /tmp/claudevibe-settings.json "$BASE/settings.json"
+diff ~/.claude/settings.json /tmp/claudevibe-settings.json
+```
+
+Two kinds of change turn up in that diff and they are not equally optional. New
+`deny` or `ask` patterns are a judgement call, and yours are quite possibly
+already stricter. A new entry under `hooks` is not a judgement call. When a
+release adds a hook, the script arrives with the update above and nothing wires
+it into `settings.json` for you, and a hook Claude Code was never told to run is
+as inert as one of the 404 stubs. Merge any `hooks` block the diff shows.
+
+Then confirm it, the same way as after a first install:
+
+```bash
+bash ~/.claude/hooks/self-test.sh
+```
+
+The self-test has a check for exactly this: it reads the `hooks` block in
+`settings.json` and reports any installed hook that is not registered there.
+That check exists because skipping `settings.json` on an update is the right
+call for your deny rules and creates this specific hole, and every other check
+in the file runs the hooks directly, so none of them would notice.
 
 ### Upgrading from a broken install
 
