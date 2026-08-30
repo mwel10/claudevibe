@@ -187,15 +187,25 @@ sit. Two things are never gated, or the gate would eat itself: the project's own
 project directory. One approval quiets it for that session; the written addendum
 quiets it permanently.
 
-Building it turned up the failure mode this repository is named for. On macOS,
-`/tmp` and `/var` are symlinks, so the file path arriving at the hook and the
-project path coming back from `git rev-parse --show-toplevel` disagreed, the
-"is this file inside the project" test never matched, and the gate silently
-allowed everything. It looked installed. It was inert. The probe that caught it
-is now five checks inside `self-test.sh`, and like the destructive-command
-check they test both directions: the gate has to ask without an addendum *and*
-stay quiet with one, because a hook that asks about everything and a hook that
-asks about nothing are equally useless and only one of them is obvious.
+Building it reproduced the failure this repository is named for, twice, in the
+same afternoon. The gate compared the file path arriving in the tool call
+against the project path coming back from `git rev-parse --show-toplevel`, as
+strings. First those disagreed because `/tmp` and `/var` are symlinks on macOS.
+Then, once that was fixed, they disagreed again on a real repository because
+the directory is called `Claudevibe` on disk while everything types
+`claudevibe`, and a case-insensitive filesystem is happy to answer to both. Each
+time, the "is this file inside the project" test never matched, and each time
+the gate allowed every write while looking perfectly installed.
+
+The fix in both cases is to stop comparing spellings. Directories are now
+compared by identity, with `-ef`, which asks the filesystem whether two paths
+are the same directory instead of whether two strings are the same text. The
+probes that caught it are six checks inside `self-test.sh`, and like the
+destructive-command check they test both directions: the gate has to ask
+without an addendum *and* stay quiet with one, and it has to keep firing when
+the project is reached by a second path. A hook that asks about everything and
+a hook that asks about nothing are equally useless, and only one of them is
+obvious.
 
 ### When the guardrail was broken
 

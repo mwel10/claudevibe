@@ -115,6 +115,19 @@ else
   bad "intake gate also gates CLAUDE.md, which deadlocks the only way out of it"
 fi
 
+# The same directory reached by a second spelling. A symlink here, a different
+# case on a case-insensitive filesystem in the wild: both are path mismatches
+# that made the gate allow everything while looking installed.
+GATE_LINK="$(mktemp -d)/link"
+ln -s "$GATE_PROJ" "$GATE_LINK" 2>/dev/null
+if [ -L "$GATE_LINK" ] && gate "$GATE_LINK/src/app.py" PreToolUse | grep -q '"permissionDecision": "ask"'; then
+  ok "intake gate still fires when the project is reached by another path"
+elif [ ! -L "$GATE_LINK" ]; then
+  ok "symlink probe skipped, this filesystem would not create one"
+else
+  bad "intake gate misses a write reached through a symlink, so any path mismatch disables it"
+fi
+
 printf '## Project addendum: security scope\n' > "$GATE_PROJ/CLAUDE.md"
 if [ -z "$(gate "$GATE_PROJ/src/app.py" PreToolUse)" ]; then
   ok "intake gate stands down once the addendum is written"

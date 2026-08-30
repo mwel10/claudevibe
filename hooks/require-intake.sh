@@ -103,18 +103,35 @@ PROJECT=$(cd "$PROJECT" 2>/dev/null && pwd -P)
 
 # --- The exemptions ----------------------------------------------------------
 
-case "$PROJECT" in
-  "$HOME"|"$HOME/.claude"|"$HOME/.claude/"*) exit 0 ;;
-esac
+# Directories are compared by identity, never by string. Two spellings of one
+# directory are routine rather than exotic: a symlink somewhere on the path,
+# which on macOS is every path under /tmp and /var, or a different case on a
+# case-insensitive filesystem, where `git rev-parse --show-toplevel` returns the
+# name as it sits on disk while the tool call carries whatever the session
+# typed. Both mismatches switched this gate off silently before it started
+# comparing inodes, and both were found on a real machine rather than imagined.
+same() { [ -e "$1" ] && [ -e "$2" ] && [ "$1" -ef "$2" ]; }
 
-case "$FILE" in
-  "$PROJECT"/*) : ;;                  # inside the project, keep checking
-  *) exit 0 ;;                        # scratch files, /tmp, ~/.claude
-esac
+same "$PROJECT" "$HOME" && exit 0
+same "$PROJECT" "$HOME/.claude" && exit 0
 
-case "$FILE" in
-  "$PROJECT/CLAUDE.md"|"$PROJECT/.claude/CLAUDE.md") exit 0 ;;
-esac
+# Is this file inside the project at all? Walk up from its nearest existing
+# ancestor. Anything that never meets the project root is a scratch file, a
+# temporary directory, or configuration, and none of those are gated.
+INSIDE=0
+D="$DIR"
+while [ -n "$D" ] && [ "$D" != "/" ] && [ "$D" != "." ]; do
+  if same "$D" "$PROJECT"; then INSIDE=1; break; fi
+  D=$(dirname "$D")
+done
+[ "$INSIDE" = 1 ] || exit 0
+
+# Writing the addendum has to stay possible, or the gate has no exit.
+if [ "$(basename "$FILE")" = "CLAUDE.md" ]; then
+  FDIR=$(dirname "$FILE")
+  same "$FDIR" "$PROJECT" && exit 0
+  same "$FDIR" "$PROJECT/.claude" && exit 0
+fi
 
 # --- Has the intake already happened? ----------------------------------------
 
