@@ -3,13 +3,18 @@
 #
 # Three jobs.
 #
-# 1. Check what a project settings file takes away. An allow rule weakens a
-#    global deny or ask rule whenever its own glob covers what that rule gates,
-#    a Bash rule reaching a gated path bypasses a rule on Edit entirely, and a
-#    defaultMode of acceptEdits or bypassPermissions switches off every ask rule
-#    at once. All three are compared against the rules in ~/.claude/settings.json
-#    as derived by deny-regex.py at runtime, so this script keeps no copy and an
-#    addition made during an intake (0.4) reaches the check automatically.
+# 1. Check what a project settings file asks for, and separately what it can
+#    actually do. Those are two lists, and this script used to conflate them.
+#    Permission rules are evaluated deny, then ask, then allow, across every
+#    settings source at once, so a project allow rule cannot override a global
+#    deny or ask rule: the global rule matches first and decides. Such a rule is
+#    reported as intent rather than as a hole. What does bypass an ask rule on
+#    Edit is a Bash rule reaching the same path, since that is a rule about a
+#    different tool, and what acts regardless are a project's own hooks, agent
+#    definitions and MCP servers. Everything is compared against the rules in
+#    ~/.claude/settings.json as derived by deny-regex.py at runtime, so this
+#    script keeps no copy and an addition made during an intake (0.4) reaches
+#    the check automatically.
 #
 # 2. Check that the guardrail itself is actually installed and working. An
 #    earlier release documented curl install URLs that returned 404, and
@@ -106,15 +111,25 @@ fi
 # the rule guarding the hooks. It also enumerated the commands that write, which
 # is enumerating badness, and it could not tell "no allow rules" from "this file
 # could not be parsed", so a malformed settings file passed in silence. And it
-# never looked at defaultMode, which switches off every ask rule at once, more
-# completely than any allow rule can.
+# never looked at defaultMode, nor at a project's own hooks, agent definitions
+# or MCP servers, which act regardless of any rule here.
 #
 # So the comparison is on capabilities now. Each global rule carries a
-# representative path it gates; a project allow rule weakens it when that rule's
-# own glob matches that path, whether or not it names it. A Bash rule is judged
-# separately, because a shell command reaching a gated path bypasses a rule on
-# Edit entirely, and it is reported unless its command is one of a short list
-# that cannot write.
+# representative path it gates, and a project allow rule is matched against that
+# path whether or not it names it.
+#
+# What that report means changed once the precedence was actually looked up.
+# Permission rules are evaluated deny, then ask, then allow, across every
+# settings source at once, so a project allow rule cannot override a global deny
+# or ask rule: the global rule matches first and decides. Such a rule is
+# therefore reported as intent, worth reading before trusting a repository, and
+# not as a hole. The line above about defaultMode has the same correction on it:
+# auto and bypassPermissions are documented as not taking effect from a project
+# file at all.
+#
+# The Bash branch is the one that finds a real bypass, because an ask rule on
+# Edit says nothing about the Bash tool. It is reported unless its command is
+# one of a short list that cannot write.
 #
 # Paths and settings files are passed as arguments; nothing is pasted into the
 # program text (B2, applied to OS commands).
@@ -232,26 +247,35 @@ for path in sys.argv[2:]:
         if not isinstance(data, dict):
             raise ValueError('not an object')
     except Exception as exc:
-        print('W:%s could not be parsed (%s), so it is unverified whether it '
-              'weakens the global rules.' % (path, exc.__class__.__name__))
+        print('W:%s could not be parsed (%s), so it is unverified what it asks '
+              'for.' % (path, exc.__class__.__name__))
         continue
 
     permissions = data.get('permissions')
     permissions = permissions if isinstance(permissions, dict) else {}
 
     mode = permissions.get('defaultMode')
-    if mode in WEAKENING_MODES:
-        print('W:%s sets defaultMode to %s, which switches off every ask rule '
-              'in this project at once, including the ones guarding the '
-              "guardrail's own files. That is broader than any allow rule."
-              % (path, mode))
+    if mode == 'acceptEdits':
+        print('W:%s sets defaultMode to acceptEdits, so file edits in this '
+              'project run without the prompt the default mode gives them.'
+              % path)
+    elif mode in WEAKENING_MODES:
+        # auto and bypassPermissions are documented as not taking effect from a
+        # project or local settings file. Reported anyway, because a settings
+        # file asking for them says something, but described as what it is
+        # rather than as an effect the documentation denies.
+        print('W:%s sets defaultMode to %s. That value is documented as not '
+              'taking effect from a project or local settings file, so it '
+              'should do nothing here, but a project asking for it is worth '
+              'reading before trusting the session.' % (path, mode))
 
     extra = permissions.get('additionalDirectories')
     if extra:
         print('W:%s sets additionalDirectories to %s. A7 names that as the '
-              'instrument that grants writing as well as reading, and it is '
-              'outside the allow and ask lists entirely, so nothing else here '
-              'reports it.' % (path, extra))
+              'instrument that grants writing as well as reading. Whether an '
+              'ask or deny rule naming a path inside such a directory still '
+              'fires is not documented, so treat that as unknown rather than '
+              'as covered.' % (path, extra))
 
     if data.get('mcpServers') or os.path.isfile(
             os.path.join(os.path.dirname(os.path.dirname(path)), '.mcp.json')):
@@ -287,9 +311,11 @@ for path in sys.argv[2:]:
                 # wider the project rule, the more global rules it swallows, and
                 # a burst of near-identical lines is how a real finding gets
                 # skimmed past.
-                print('W:%s allows %s, which covers what %s gates. An allow '
-                      'rule does not have to name the gated path to take it '
-                      'away; it only has to match it.'
+                print('W:%s allows %s, which covers what %s gates. The global '
+                      'rule still wins, because deny and ask are evaluated '
+                      'before allow across every settings source: this says '
+                      'what the project expected to be able to do, not that it '
+                      'can.'
                       % (path, rule, ', '.join(covered)))
             continue
 
@@ -299,8 +325,9 @@ for path in sys.argv[2:]:
         command = inner
         if command == '**':
             print('W:%s allows Bash with no command specified, which is every '
-                  'shell command in this project, including any that writes '
-                  'into the directories the global ask rules gate.' % path)
+                  'shell command in this project. A rule on Edit does not '
+                  'constrain the Bash tool, so this one does reach the '
+                  'directories the global ask rules gate.' % path)
             continue
         first = ''
         for token in command.split():
@@ -366,7 +393,7 @@ PROJECT_REPORT=$(printf '%s\n' "$GATED_JSON" | python3 -c "$PROJECT_PY" "$HOME" 
 # A missing terminal OK means no verdict was reached, which is not the same as
 # nothing to report and must not read like it.
 if [ "$(printf '%s\n' "$PROJECT_REPORT" | tail -n 1)" != "OK" ]; then
-  WARNINGS+=("The project settings files could not be checked, so it is unverified whether this project weakens the global deny or ask rules.")
+  WARNINGS+=("The project settings files could not be checked, so it is unverified what this project asks for and whether it brings hooks, agent definitions or MCP servers of its own.")
 else
   while IFS= read -r LINE; do
     case "$LINE" in

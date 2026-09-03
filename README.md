@@ -116,16 +116,16 @@ conversation says:
   definition declares nothing beyond read-only tools, and asks everywhere else,
   the main conversation included. A fetch always asks, because its destination
   is chosen by the model. See "Why a web read asks" below.
-- **`hooks/verify-settings.sh`** (`SessionStart`) — checks, at the start of
-  every session, whether a project's own `.claude/settings.json` or
-  `.claude/settings.local.json` takes away something a global `deny` or `ask`
-  rule gates, and raises an active warning if so. It compares capabilities
-  rather than spellings: an allow rule counts when its glob covers a gated
-  path whether or not it names it, a shell rule reaching that path counts
-  unless its command cannot write, and `defaultMode` counts because it
-  switches off every `ask` rule at once. It also reports what an enabled
-  plugin contributes, because a plugin is a third source of hooks and
-  subagent definitions that the other checks never looked at.
+- **`hooks/verify-settings.sh`** (`SessionStart`) — reports, at the start of
+  every session, what a project's own `.claude/settings.json` or
+  `.claude/settings.local.json` asks for and what it can actually do. It
+  compares capabilities rather than spellings: an allow rule is reported when
+  its glob covers a gated path whether or not it names it, a shell rule
+  reaching that path is reported unless its command cannot write, and a
+  project's `defaultMode`, `additionalDirectories`, own hooks, own MCP servers
+  and own agent definitions are reported. It also reports what an enabled
+  plugin contributes, because a plugin is a third source of hooks and subagent
+  definitions that the other checks never looked at.
 - **`hooks/self-test.sh`** — not a hook, but the thing that tells you the
   hooks are real. Run it by hand: it checks the install and then verifies that
   a destructive command is actually blocked and a harmless one is not.
@@ -268,10 +268,27 @@ the check reports the executable surface a plugin actually contributes rather
 than passing judgement on the plugin. A skills-only plugin stays silent, which
 is what keeps the warning worth reading when it does appear.
 
-#### Why the comparison is not a text match
+#### What a project can and cannot take away
 
-A project can take away what a global rule gates, and the check that notices
-used to compare the *text* of a project's allow rules against the global ones.
+Start with the correction, because the first version of this section had it
+wrong. Permission rules are evaluated **deny, then ask, then allow, across every
+settings source at once**, and the first match in that order decides. A project
+allow rule therefore *cannot* override a global `deny` or `ask` rule. The global
+rule matches first and wins, whatever the settings-source precedence says. That
+was worth looking up rather than assuming, and looking it up changed what this
+check means: an allow rule covering a gated path is reported as **intent** —
+what this repository expected to be able to do, which is worth knowing before
+you trust it — and not as a hole.
+
+Three things do act regardless of any rule here, and they are the ones to read:
+a project's own `hooks`, its own `.claude/agents` definitions, and its own MCP
+servers. So does a `Bash` rule reaching a gated path, because an `ask` rule on
+`Edit` says nothing about the `Bash` tool. `defaultMode` is a smaller lever than
+it looks: `auto` and `bypassPermissions` are documented as not taking effect
+from a project or local settings file at all.
+
+Even reporting intent has to be done properly, and the check that did it used to
+compare the *text* of a project's allow rules against the global ones.
 That is the wrong way round in the most literal sense: `Edit(~/.claude/hooks/**)`
 was caught, and `Edit(~/.claude/**)` — which covers it, and more — was not,
 because it contains no literal `~/.claude/hooks/`. The wider and more
@@ -290,9 +307,11 @@ from the same shift, and each was a silence before:
   though `echo` is on the list. `bash` is deliberately not on that list at all:
   running a script that lives in the gated directory is exactly the channel the
   rule cannot see.
-- A `defaultMode` of `acceptEdits` or `bypassPermissions` switches off every
-  `ask` rule in a project at once, more completely than any allow rule, and
-  nothing had ever looked at it.
+- `defaultMode`, `additionalDirectories`, a project's own hooks and its own MCP
+  servers were never looked at, and those are where the real leverage is.
+  Whether an `ask` rule naming a path inside an `additionalDirectories` entry
+  still fires is not documented, so it is reported as unknown rather than as
+  covered.
 - A project settings file that cannot be parsed used to produce an empty list of
   rules, which read exactly like a project that weakens nothing.
 

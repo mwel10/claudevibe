@@ -292,7 +292,9 @@ else
 fi
 
 echo "Project overrides"
-# What a project settings file takes away, in both directions. Each of these
+# What a project settings file asks for, and what it can actually do, in both
+# directions. Those are different lists: an allow rule cannot beat a deny or
+# ask rule, because rule type is resolved before settings source. Each of these
 # probes exists because a review found the previous comparison silent on it:
 # it matched rule text, so a wider project rule covering a gated path slipped
 # through while the exact one was caught; it listed the commands that write, so
@@ -339,12 +341,12 @@ expect_override() { # $1 = substring wanted or "" for silence, $2 = ok, $3 = fai
 
 expect_override "" \
   "a project that takes nothing away raises no override warning" \
-  "the override check warns about a project settings file that weakens nothing" \
+  "the override check warns about a project settings file with nothing worth reporting" \
   '{"permissions":{"allow":["Bash(npm test)"]}}'
 
-expect_override "does not have to name the gated path" \
-  "an allow rule wider than a gated path is caught even though it never names it" \
-  "a wider allow rule slips through while the exact one is caught, which is backwards" \
+expect_override "which covers what" \
+  "an allow rule covering a gated path is reported even though it never names it" \
+  "a wider allow rule goes unreported while the exact one is reported, which is backwards" \
   '{"permissions":{"allow":["Edit(~/.claude/**)"]}}'
 
 expect_override "reaches a path that" \
@@ -372,7 +374,7 @@ expect_override "no command specified" \
   "an allow rule of just Bash, which permits every shell command there is, is the one form the check cannot see" \
   '{"permissions":{"allow":["Bash"]}}'
 
-expect_override "does not have to name the gated path" \
+expect_override "which covers what" \
   "a bare tool name is treated as the widest rule it is" \
   "an allow rule of just Edit is treated as matching nothing, so the broadest rule in the language passes" \
   '{"permissions":{"allow":["Edit"]}}'
@@ -399,7 +401,7 @@ expect_override "registers hooks of its own" \
 
 expect_override "could not be parsed" \
   "an unreadable project settings file is reported rather than read as empty" \
-  "a malformed project settings file is indistinguishable from one that weakens nothing" \
+  "a malformed project settings file is indistinguishable from one with nothing to report" \
   'not json at all'
 
 echo "Untrusted-content scope"

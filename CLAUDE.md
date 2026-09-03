@@ -69,10 +69,13 @@ the guardrail's own source, not only to its installed copy.
   with no rollback point.
 - **What the session-start check does and does not see:** it compares a project
   settings file against the global rules by capability rather than by spelling,
-  so an allow rule wider than a gated path is caught, a bare tool name is caught,
-  `defaultMode`, `additionalDirectories`, a project `hooks` block and project MCP
-  servers are reported, and a file it cannot parse is reported rather than read
-  as empty. The Bash branch is different in kind and is a heuristic: it compares
+  and it separates what a project asks for from what it can do. An allow rule
+  covering a gated path is reported as intent only: rules are evaluated deny,
+  then ask, then allow across every settings source, so a project allow rule
+  cannot override a global one. What acts regardless, and is reported as such,
+  is a project's own hooks, agent definitions and MCP servers, a Bash rule
+  reaching a gated path, `defaultMode` and `additionalDirectories`. A file it
+  cannot parse is reported rather than read as empty. The Bash branch is different in kind and is a heuristic: it compares
   the text of a command against the gated paths after normalising quoting and
   `$HOME`, so a command reaching a path through a variable, a `cd` or a script it
   calls is not seen, and three deny rules beginning with a glob are not compared

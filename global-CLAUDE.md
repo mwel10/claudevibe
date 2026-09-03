@@ -297,9 +297,16 @@ alongside this file in the same repository:
   turns the Part 0 intake from an instruction into a condition, as described
   at the end of A9.
 - **`verify-settings.sh`** (SessionStart) — checks at the start of every
-  session whether a project-level `.claude/settings.json` or
-  `.claude/settings.local.json` contains an allow rule that could weaken a
-  global deny rule or an ask rule, and raises an active warning in the session if so. It also
+  session what a project-level `.claude/settings.json` or
+  `.claude/settings.local.json` asks for, and separately what it can actually
+  do. Those are two lists. Permission rules are evaluated deny, then ask, then
+  allow, across every settings source at once, so a project allow rule cannot
+  override a global deny or ask rule: the global rule matches first and wins.
+  An allow rule covering a gated path is therefore reported as intent, worth
+  reading before trusting a repository, and not as a hole. What acts regardless
+  is a project's own hooks, its own agent definitions and its own MCP servers,
+  and a Bash rule reaching a gated path, since an ask rule on Edit says nothing
+  about the Bash tool. It also
   checks the guardrail itself: are the hooks present, executable, and actually
   scripts rather than a downloaded error page, and can the deny patterns still
   be derived? A broken install used to be invisible, because the hook meant to
