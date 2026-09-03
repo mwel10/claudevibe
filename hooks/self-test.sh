@@ -251,6 +251,92 @@ else
   echo "$ALLOW_OUT" | sed 's/^/          /'
 fi
 
+echo "Project overrides"
+# What a project settings file takes away, in both directions. Each of these
+# probes exists because a review found the previous comparison silent on it:
+# it matched rule text, so a wider project rule covering a gated path slipped
+# through while the exact one was caught; it listed the commands that write, so
+# every command it had not thought of passed; it could not tell a malformed file
+# from an empty one; and it never looked at defaultMode, which switches off
+# every ask rule at once. HOME and the working directory are both redirected.
+OVR_HOME=$(mktemp -d)
+OVR_PROJ=$(mktemp -d)
+mkdir -p "$OVR_HOME/.claude/hooks/lib" "$OVR_HOME/.claude/agents" "$OVR_PROJ/.claude"
+cp "$HOOK_DIR"/*.sh "$OVR_HOME/.claude/hooks/" 2>/dev/null || true
+cp "$HOOK_DIR/lib/deny-regex.py" "$OVR_HOME/.claude/hooks/lib/" 2>/dev/null || true
+cp "$CLAUDE_DIR/agents"/*.md "$OVR_HOME/.claude/agents/" 2>/dev/null || true
+cp "$CLAUDE_DIR/CLAUDE.md" "$OVR_HOME/.claude/CLAUDE.md" 2>/dev/null || true
+
+STRIP_PLUGINS_PY=$(cat <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+data.pop("enabledPlugins", None)
+with open(sys.argv[2], "w") as f:
+    json.dump(data, f, indent=2)
+PYEOF
+)
+python3 -c "$STRIP_PLUGINS_PY" "$CLAUDE_DIR/settings.json" \
+  "$OVR_HOME/.claude/settings.json" 2>/dev/null || true
+
+override() { # $1 = the contents of the project settings file
+  printf '%s' "$1" > "$OVR_PROJ/.claude/settings.local.json"
+  (cd "$OVR_PROJ" && HOME="$OVR_HOME" bash "$OVR_HOME/.claude/hooks/verify-settings.sh" 2>&1 || true)
+}
+
+expect_override() { # $1 = substring wanted or "" for silence, $2 = ok, $3 = fail
+  local OUT
+  OUT=$(override "$4")
+  if [ -z "$1" ]; then
+    if [ -z "$OUT" ]; then ok "$2"; else bad "$3"; echo "$OUT" | sed 's/^/          /'; fi
+    return
+  fi
+  case "$OUT" in
+    *"$1"*) ok "$2" ;;
+    *)      bad "$3" ;;
+  esac
+}
+
+expect_override "" \
+  "a project that takes nothing away raises no override warning" \
+  "the override check warns about a project settings file that weakens nothing" \
+  '{"permissions":{"allow":["Bash(npm test)"]}}'
+
+expect_override "does not have to name the gated path" \
+  "an allow rule wider than a gated path is caught even though it never names it" \
+  "a wider allow rule slips through while the exact one is caught, which is backwards" \
+  '{"permissions":{"allow":["Edit(~/.claude/**)"]}}'
+
+expect_override "reaches a path that" \
+  "a shell rule writing into a gated directory is reported" \
+  "a shell command writing into a gated directory is invisible to the check that guards it" \
+  '{"permissions":{"allow":["Bash(touch ~/.claude/hooks/x.sh)"]}}'
+
+expect_override "" \
+  "a shell rule that only reads a gated path stays silent" \
+  "a read-only command at a gated path warns, and a warning that is always on gets clicked away" \
+  '{"permissions":{"allow":["Bash(cat ~/.claude/hooks/x.sh)"]}}'
+
+expect_override "reaches a path that" \
+  "a gated path spelled with \$HOME is recognised" \
+  "a rule written with \$HOME instead of ~ matches nothing, so the spelling decides whether the check works" \
+  '{"permissions":{"allow":["Bash(cp a $HOME/.claude/hooks/)"]}}'
+
+expect_override "defaultMode" \
+  "a project defaultMode that switches off every ask rule is reported" \
+  "a project can set defaultMode to bypassPermissions and no check mentions it" \
+  '{"permissions":{"defaultMode":"bypassPermissions","allow":[]}}'
+
+expect_override "registers hooks of its own" \
+  "a project registering its own hooks is reported" \
+  "a project can register hooks that run in every session with nothing looking at them" \
+  '{"permissions":{"allow":[]},"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"x"}]}]}}'
+
+expect_override "could not be parsed" \
+  "an unreadable project settings file is reported rather than read as empty" \
+  "a malformed project settings file is indistinguishable from one that weakens nothing" \
+  'not json at all'
+
 echo "Untrusted-content scope"
 # A9 puts web reads inside a read-only subagent so a prompt injection lands
 # somewhere it can do nothing. scope-untrusted.sh is what turns that from advice

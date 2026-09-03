@@ -118,11 +118,14 @@ conversation says:
   is chosen by the model. See "Why a web read asks" below.
 - **`hooks/verify-settings.sh`** (`SessionStart`) — checks, at the start of
   every session, whether a project's own `.claude/settings.json` or
-  `.claude/settings.local.json` contains an `allow` rule that could weaken
-  one of the global `deny` rules or an `ask` rule, and raises an active
-  warning in the session if so. It also reports what an enabled plugin
-  contributes, because a plugin is a third source of hooks and subagent
-  definitions that the other checks never looked at.
+  `.claude/settings.local.json` takes away something a global `deny` or `ask`
+  rule gates, and raises an active warning if so. It compares capabilities
+  rather than spellings: an allow rule counts when its glob covers a gated
+  path whether or not it names it, a shell rule reaching that path counts
+  unless its command cannot write, and `defaultMode` counts because it
+  switches off every `ask` rule at once. It also reports what an enabled
+  plugin contributes, because a plugin is a third source of hooks and
+  subagent definitions that the other checks never looked at.
 - **`hooks/self-test.sh`** — not a hook, but the thing that tells you the
   hooks are real. Run it by hand: it checks the install and then verifies that
   a destructive command is actually blocked and a harmless one is not.
@@ -244,6 +247,31 @@ That a plugin ships only skills today says nothing about its next version, so
 the check reports the executable surface a plugin actually contributes rather
 than passing judgement on the plugin. A skills-only plugin stays silent, which
 is what keeps the warning worth reading when it does appear.
+
+#### Why the comparison is not a text match
+
+A project can take away what a global rule gates, and the check that notices
+used to compare the *text* of a project's allow rules against the global ones.
+That is the wrong way round in the most literal sense: `Edit(~/.claude/hooks/**)`
+was caught, and `Edit(~/.claude/**)` — which covers it, and more — was not,
+because it contains no literal `~/.claude/hooks/`. The wider and more
+consequential the project rule, the more certainly it passed.
+
+So each global rule now carries a representative path it gates, and a project
+allow rule counts when its own glob matches that path. Three other things follow
+from the same shift, and each was a silence before:
+
+- A `Bash` rule reaching a gated path bypasses a rule on `Edit` entirely, so it
+  is reported unless its command is one of a short list that cannot write. The
+  earlier version listed the commands that *do* write, which meant `touch`,
+  `tar -x`, `git checkout` and everything else nobody thought of passed
+  quietly. `bash` is deliberately not on the read-only list: running a script
+  that lives in the gated directory is exactly the channel the rule cannot see.
+- A `defaultMode` of `acceptEdits` or `bypassPermissions` switches off every
+  `ask` rule in a project at once, more completely than any allow rule, and
+  nothing had ever looked at it.
+- A project settings file that cannot be parsed used to produce an empty list of
+  rules, which read exactly like a project that weakens nothing.
 
 `verify-settings.sh` checks at session start that the four rules are still
 there, so a settings file restored from an older copy announces itself instead

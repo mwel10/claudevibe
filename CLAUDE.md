@@ -62,6 +62,13 @@ the guardrail's own source, not only to its installed copy.
   renaming any file whose path appears in the README install URLs or in the
   `hooks` block. `git push` to `main` is an immediate deploy to every installer
   with no rollback point.
+- **What the session-start check does and does not see:** it compares a project
+  settings file against the global rules by capability rather than by spelling,
+  so an allow rule wider than a gated path is caught, a shell rule reaching that
+  path is reported unless its command cannot write, `defaultMode` and a project
+  `hooks` block are reported, and a file it cannot parse is reported rather than
+  read as empty. What it still cannot see is anything that is not a tool call,
+  per the boundary in A7.
 - **Approval gate and how it is enforced:** Weak, and mostly not enforced.
   `Bash(git push*)` is in `ask` and force-push in `deny`, so a push *through
   Claude Code* prompts. Nothing else holds: `.github/` contains only
@@ -122,14 +129,6 @@ the guardrail's own source, not only to its installed copy.
   *installed* copies under `~/.claude/`. Editing `hooks/`, `agents/` and
   `settings.json` in this working tree is gated by nothing, and a change here is
   what eventually reaches every installer.
-- **OPEN: the comparisons match spellings, not capabilities.** The ask and deny
-  comparison in `verify-settings.sh` greps rule text, so a project rule that is
-  *wider* than the gated path slips through where the exact one is caught, its
-  writer-token list enumerates badness rather than recognising the read-only
-  case, and a project `defaultMode` of `acceptEdits` or `bypassPermissions`
-  neutralises every ask rule at once without being looked at. The probing
-  technique that would fix it already exists in the same file, in the allow-list
-  check. Raised by review on 2026-09-03, deliberately not fixed in that change.
 - **OPEN: log retention.** Nothing prunes `~/.claude/logs/`, and receipts retain
   up to 1000 characters of agent output indefinitely.
 - **OPEN: platform contract monitoring.** The hooks depend on Claude Code JSON

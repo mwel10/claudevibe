@@ -3,11 +3,13 @@
 #
 # Three jobs.
 #
-# 1. Check whether a project-level .claude/settings.json or
-#    .claude/settings.local.json contains an allow rule that could weaken a
-#    global deny rule from ~/.claude/settings.json. Patterns come from
-#    deny-regex.py at runtime, so this script keeps no copy of the deny list:
-#    an addition made during an intake (0.4) reaches this check automatically.
+# 1. Check what a project settings file takes away. An allow rule weakens a
+#    global deny or ask rule whenever its own glob covers what that rule gates,
+#    a Bash rule reaching a gated path bypasses a rule on Edit entirely, and a
+#    defaultMode of acceptEdits or bypassPermissions switches off every ask rule
+#    at once. All three are compared against the rules in ~/.claude/settings.json
+#    as derived by deny-regex.py at runtime, so this script keeps no copy and an
+#    addition made during an intake (0.4) reaches the check automatically.
 #
 # 2. Check that the guardrail itself is actually installed and working. An
 #    earlier release documented curl install URLs that returned 404, and
@@ -16,7 +18,9 @@
 #    weeks. A guardrail that cannot detect its own absence is not a guardrail,
 #    so that case is now checked explicitly at every session start.
 #
-# 3. Check the subagent definitions A9 relies on: that the shared set in
+# 3. Check the subagent definitions A9 relies on, and what an enabled plugin
+#    contributes, since a plugin is a third source of hooks and definitions
+#    beside the user and project levels: that the shared set in
 #    ~/.claude/agents is installed at all, and that no definition, user-level
 #    or project-level, gives itself a permission mode that cannot ask before a
 #    destructive action. A subagent's tool scope lives in its own frontmatter
@@ -68,20 +72,10 @@ fi
 # --- 2. Load the deny patterns ------------------------------------------------
 
 DENY_PATTERNS=()
-ASK_PATTERNS=()
 if [ -f "$LIB" ]; then
   while IFS= read -r line; do
     [ -n "$line" ] && DENY_PATTERNS+=("$line")
   done < <(python3 "$LIB" 2>/dev/null || true)
-  # An allow rule in a project neutralises an ask rule exactly as effectively as
-  # it neutralises a deny rule, and until now only the deny half was compared
-  # against anything. A standing project approval for, say, copying a file into
-  # ~/.claude/hooks is a permanent hole in the confirmation the ask rules exist
-  # to create, and it is invisible precisely because it lives in a file nobody
-  # rereads.
-  while IFS= read -r line; do
-    [ -n "$line" ] && ASK_PATTERNS+=("$line")
-  done < <(python3 "$LIB" --list ask 2>/dev/null || true)
 fi
 
 # bash 3.2, which macOS ships, treats an empty array as unset under `set -u`,
@@ -92,59 +86,219 @@ if [ ${#DENY_PATTERNS[@]} -eq 0 ]; then
   WARNINGS+=("No deny patterns could be derived from ~/.claude/settings.json: the deny list is empty, unreadable, or malformed.")
 fi
 
-# The settings path is passed as an argument rather than pasted into the
-# program text. It is derived from the working directory, so a directory whose
-# name contains a quote would break the program and make this check pass
-# silently, and one containing a quote followed by Python would run it, in a
-# hook that fires at every session start. B2 forbids building a query by
-# concatenation and says it applies to OS commands; a `python3 -c` program is
-# one. record-agent-run.sh already does it this way.
-READ_ALLOW_PY=$(cat <<'PY'
-import json, sys
-try:
-    with open(sys.argv[1]) as f:
-        allow = json.load(f).get('permissions', {}).get('allow', [])
-    print('\n'.join(r for r in allow if isinstance(r, str)))
-except Exception:
-    pass
-PY
-)
+# What a project settings file can take away, and whether it does.
+#
+# This used to compare the text of a project's allow rules against regex
+# fragments of the global rules. That catches a project rule spelling the exact
+# gated path and misses a wider one covering it, which is the wrong way round:
+# Edit(~/.claude/**) contains no literal "~/.claude/hooks/" and so slipped past
+# the rule guarding the hooks. It also enumerated the commands that write, which
+# is enumerating badness, and it could not tell "no allow rules" from "this file
+# could not be parsed", so a malformed settings file passed in silence. And it
+# never looked at defaultMode, which switches off every ask rule at once, more
+# completely than any allow rule can.
+#
+# So the comparison is on capabilities now. Each global rule carries a
+# representative path it gates; a project allow rule weakens it when that rule's
+# own glob matches that path, whether or not it names it. A Bash rule is judged
+# separately, because a shell command reaching a gated path bypasses a rule on
+# Edit entirely, and it is reported unless its command is one of a short list
+# that cannot write.
+#
+# Paths and settings files are passed as arguments; nothing is pasted into the
+# program text (B2, applied to OS commands).
+PROJECT_PY=$(cat <<'PYEOF'
+import json
+import os
+import re
+import sys
+from fnmatch import fnmatch
 
-check_file_for_overrides() {
-  local FILE="$1"
-  [ -f "$FILE" ] || return 0
+home = sys.argv[1]
 
-  local ALLOW_BLOCK
-  ALLOW_BLOCK=$(python3 -c "$READ_ALLOW_PY" "$FILE" 2>/dev/null || echo "")
+FILE_TOOLS = {'Read', 'Edit', 'Write', 'NotebookEdit'}
 
-  [ -z "$ALLOW_BLOCK" ] && return 0
-
-  for PATTERN in ${DENY_PATTERNS[@]+"${DENY_PATTERNS[@]}"}; do
-    if echo "$ALLOW_BLOCK" | grep -qiE "$PATTERN"; then
-      WARNINGS+=("$FILE contains an allow rule matching deny pattern '$PATTERN' from ~/.claude/settings.json.")
-    fi
-  done
-
-  # The path comparison is deliberately tool-blind, because the point of the
-  # ask rules on ~/.claude is that a Bash rule writing the same file bypasses
-  # an Edit rule entirely. The cost of that is a false positive on a rule that
-  # merely runs something at a gated path, and a warning that is always on is a
-  # warning that gets clicked away, so a matching Bash rule is only reported
-  # when it also looks like it writes. The list errs towards warning.
-  local MATCHED WRITERS
-  for PATTERN in ${ASK_PATTERNS[@]+"${ASK_PATTERNS[@]}"}; do
-    MATCHED=$(echo "$ALLOW_BLOCK" | grep -iE "$PATTERN" || true)
-    [ -z "$MATCHED" ] && continue
-    WRITERS=$(echo "$MATCHED" | grep -viE '^Bash\(' || true)
-    WRITERS="$WRITERS
-$(echo "$MATCHED" | grep -iE '^Bash\(.*(cp |mv |tee |chmod|curl|wget|install |ln |sed -i|dd |truncate|>)' || true)"
-    [ -z "$(printf '%s' "$WRITERS" | tr -d '[:space:]')" ] && continue
-    WARNINGS+=("$FILE contains an allow rule matching ask pattern '$PATTERN' from ~/.claude/settings.json, so the confirmation that rule exists to create never happens in this project. The rule: $(printf '%s' "$WRITERS" | tr -s '\n' ' ' | sed 's/^ *//')")
-  done
+# Commands that cannot modify a file. Anything absent is reported, which is the
+# inverse of the previous version: that one listed the commands that write, and
+# every command it had not thought of passed in silence. `bash` is deliberately
+# absent. Running a script that lives in a gated directory is exactly the
+# channel a rule on Edit cannot see.
+READ_ONLY_COMMANDS = {
+    'cat', 'head', 'tail', 'less', 'more', 'wc', 'grep', 'egrep', 'fgrep',
+    'rg', 'ls', 'find', 'stat', 'file', 'diff', 'cmp', 'md5', 'shasum',
+    'sha256sum', 'echo', 'printf', 'true', 'test',
 }
 
-check_file_for_overrides "$(pwd)/.claude/settings.json"
-check_file_for_overrides "$(pwd)/.claude/settings.local.json"
+WEAKENING_MODES = {'acceptEdits', 'bypassPermissions'}
+
+
+def expand(path):
+    if path.startswith('~/'):
+        return home + '/' + path[2:]
+    if path.startswith('//'):
+        return '/' + path[2:]
+    for prefix in ('$HOME/', '${HOME}/'):
+        if path.startswith(prefix):
+            return home + '/' + path[len(prefix):]
+    return path
+
+
+def as_pattern(path):
+    # ** and * both become fnmatch's *, which spans separators: the comparison
+    # over-matches rather than under-matches, which is the safe direction.
+    return expand(path).replace('**', '*')
+
+
+def parse(rule):
+    match = re.match(r'^([A-Za-z]+)\((.*)\)$', rule)
+    if match:
+        return match.group(1), match.group(2)
+    return rule, ''
+
+
+gated = []
+for line in sys.stdin.read().splitlines():
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        gated.append(json.loads(line))
+    except Exception:
+        pass
+
+if not gated:
+    print('W:no deny or ask rules could be derived from ~/.claude/settings.json, '
+          'so no project settings file was compared against anything.')
+
+for path in sys.argv[2:]:
+    if not os.path.isfile(path):
+        continue
+    try:
+        with open(path) as handle:
+            data = json.load(handle)
+        if not isinstance(data, dict):
+            raise ValueError('not an object')
+    except Exception as exc:
+        print('W:%s could not be parsed (%s), so it is unverified whether it '
+              'weakens the global rules.' % (path, exc.__class__.__name__))
+        continue
+
+    permissions = data.get('permissions')
+    permissions = permissions if isinstance(permissions, dict) else {}
+
+    mode = permissions.get('defaultMode')
+    if mode in WEAKENING_MODES:
+        print('W:%s sets defaultMode to %s, which switches off every ask rule '
+              'in this project at once, including the ones guarding the '
+              "guardrail's own files. That is broader than any allow rule."
+              % (path, mode))
+
+    if data.get('hooks'):
+        print('W:%s registers hooks of its own. They run in every session in '
+              'this project alongside the ones from ~/.claude/settings.json, '
+              'and nothing here reviews them. Read them before trusting this '
+              'session.' % path)
+
+    allow = permissions.get('allow')
+    allow = [r for r in allow if isinstance(r, str)] if isinstance(allow, list) else []
+
+    for rule in allow:
+        tool, inner = parse(rule)
+
+        if tool in FILE_TOOLS:
+            pattern = as_pattern(inner)
+            covered = []
+            for record in gated:
+                if record.get('tool') != tool:
+                    continue
+                if fnmatch(record.get('probe', ''), pattern):
+                    covered.append('%s(%s) in the %s list'
+                                   % (record['tool'], record['path'],
+                                      record['list']))
+            if covered:
+                # One warning per allow rule, not one per rule it covers: the
+                # wider the project rule, the more global rules it swallows, and
+                # a burst of near-identical lines is how a real finding gets
+                # skimmed past.
+                print('W:%s allows %s, which covers what %s gates. An allow '
+                      'rule does not have to name the gated path to take it '
+                      'away; it only has to match it.'
+                      % (path, rule, ', '.join(covered)))
+            continue
+
+        if tool != 'Bash':
+            continue
+
+        command = inner
+        first = ''
+        for token in command.split():
+            if '=' in token and not token.startswith('-'):
+                continue
+            first = os.path.basename(token)
+            break
+
+        reported = False
+        for record in gated:
+            if record.get('tool') not in FILE_TOOLS:
+                continue
+            # The variants already carry every spelling deny-regex.py knows
+            # about: ~/, the expanded home, //, $HOME and ${HOME}. Expanding
+            # them again here, and the command with them, is what made this
+            # miss a rule written with a tilde, which is the spelling a person
+            # actually types.
+            hit = False
+            for variant in record.get('variants', []):
+                stem = variant.split('*')[0].rstrip('/')
+                if len(stem) > 1 and stem in command:
+                    hit = True
+                    break
+            if not hit or first in READ_ONLY_COMMANDS:
+                continue
+            print('W:%s allows the shell command %s, which reaches a path that '
+                  '%s(%s) in the global %s list gates. A shell rule is not '
+                  'stopped by a rule on Edit or Read, so that confirmation never '
+                  'happens in this project. Remove the standing approval, or '
+                  'answer the question each time.'
+                  % (path, rule, record['tool'], record['path'], record['list']))
+            reported = True
+            break
+
+        if reported:
+            continue
+
+        for record in gated:
+            if record.get('tool') != 'Bash':
+                continue
+            fragment = re.escape(record['path']).replace(r'\*', '.*')
+            if re.search(fragment, command, re.IGNORECASE):
+                print('W:%s allows %s, which matches Bash(%s) in the global %s '
+                      'list.' % (path, rule, record['path'], record['list']))
+
+print('OK')
+PYEOF
+)
+
+GATED_JSON=""
+if [ -f "$LIB" ]; then
+  GATED_JSON=$(python3 "$LIB" --format json 2>/dev/null || true)
+  GATED_JSON="$GATED_JSON
+$(python3 "$LIB" --list ask --format json 2>/dev/null || true)"
+fi
+
+PROJECT_REPORT=$(printf '%s\n' "$GATED_JSON" | python3 -c "$PROJECT_PY" "$HOME" \
+  "$(pwd)/.claude/settings.json" "$(pwd)/.claude/settings.local.json" 2>/dev/null || true)
+
+# A missing terminal OK means no verdict was reached, which is not the same as
+# nothing to report and must not read like it.
+if [ "$(printf '%s\n' "$PROJECT_REPORT" | tail -n 1)" != "OK" ]; then
+  WARNINGS+=("The project settings files could not be checked, so it is unverified whether this project weakens the global deny or ask rules.")
+else
+  while IFS= read -r LINE; do
+    case "$LINE" in
+      W:*) WARNINGS+=("${LINE#W:}") ;;
+    esac
+  done <<< "$PROJECT_REPORT"
+fi
 
 if [ ! -f "$HOME/.claude/settings.json" ]; then
   WARNINGS+=("~/.claude/settings.json is missing: the global deny/ask rules and hooks are not active in this session.")

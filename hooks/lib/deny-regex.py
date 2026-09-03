@@ -13,6 +13,17 @@ Usage:
   deny-regex.py              all deny rules, one regex per line on stdout
   deny-regex.py --tool Bash  only rules whose tool prefix is "Bash"
   deny-regex.py --list ask   read permissions.ask instead of permissions.deny
+  deny-regex.py --format json  one JSON object per rule: tool, path, and the
+                               representative path a subsuming allow rule would
+                               also match
+
+The json form exists because a regex fragment has already thrown away the two
+things a subsumption test needs: which tool the rule applies to, and the glob
+structure of its path. Comparing rule *text* means the exact gated path is
+caught while a wider project rule covering it is not, which is the wrong way
+round. verify-settings.sh uses the json form; check-destructive.sh still uses
+the regex form, so both keep deriving from permissions in settings.json rather
+than carrying a copy.
 
 The --list flag exists because an allow rule in a project can neutralise an
 ask rule just as effectively as a deny rule, and only the deny half was ever
@@ -23,6 +34,18 @@ import json
 import os
 import re
 import sys
+
+
+def representative(pattern):
+    """One concrete path the pattern matches.
+
+    A rule is weakened by any allow rule whose own glob also covers what it
+    gates, so the test is whether the allow pattern matches a path the gated
+    pattern describes. `**` stands for a couple of segments and `*` for one
+    name, which is enough to catch the wider-rule case that a text comparison
+    misses entirely.
+    """
+    return pattern.replace("**", "seg/leaf").replace("*", "seg")
 
 
 def main():
@@ -42,6 +65,11 @@ def main():
     list_name = flag("--list", "deny")
     if list_name not in ("deny", "ask"):
         sys.exit("--list takes deny or ask")
+
+    out_format = flag("--format", "regex")
+    if out_format not in ("regex", "json"):
+        sys.exit("--format takes regex or json")
+    as_json = out_format == "json"
 
     settings_path = os.environ.get(
         "CLAUDE_GLOBAL_SETTINGS", os.path.expanduser("~/.claude/settings.json")
@@ -73,8 +101,29 @@ def main():
         variants = [inner]
         if inner.startswith("~/"):
             rest = inner[2:]
+            # $HOME and ${HOME} are legal spellings inside a Bash rule and were
+            # missing here, so a project approval written that way matched
+            # nothing at all.
             variants.append(home + "/" + rest)
             variants.append("//" + home.lstrip("/") + "/" + rest)
+            variants.append("$HOME/" + rest)
+            variants.append("${HOME}/" + rest)
+
+        if as_json:
+            record = {
+                "list": list_name,
+                "tool": tool,
+                "path": inner,
+                "variants": variants,
+                "probe": representative(inner.replace("~/", home + "/", 1)
+                                        if inner.startswith("~/") else inner),
+            }
+            line = json.dumps(record, sort_keys=True)
+            if line not in seen:
+                seen.add(line)
+                print(line)
+            continue
+
         for variant in variants:
             pattern = re.escape(variant).replace(r"\*", ".*")
             if pattern not in seen:
