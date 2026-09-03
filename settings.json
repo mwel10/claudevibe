@@ -14,9 +14,19 @@
       "Read(*/.aws/**)",
       "Read(*id_rsa*)",
       "Edit(.env)",
-      "Edit(.env.*)"
+      "Edit(.env.*)",
+      "Read(~/.claude/.credentials.json)",
+      "Read(~/.claude.json)"
     ],
     "ask": [
+      "Edit(~/.claude/hooks/**)",
+      "Write(~/.claude/hooks/**)",
+      "Edit(~/.claude/agents/**)",
+      "Write(~/.claude/agents/**)",
+      "Edit(~/.claude/settings.json)",
+      "Write(~/.claude/settings.json)",
+      "Edit(~/.claude/CLAUDE.md)",
+      "Write(~/.claude/CLAUDE.md)",
       "Bash(git push*)",
       "Bash(terraform apply*)",
       "Bash(terraform destroy*)",
@@ -25,6 +35,12 @@
       "Bash(npm publish*)",
       "Bash(*delete*)",
       "Bash(*--force*)"
+    ],
+    "allow": [
+      "Read(~/.claude/CLAUDE.md)",
+      "Read(~/.claude/settings.json)",
+      "Read(~/.claude/agents/**)",
+      "Read(~/.claude/hooks/**)"
     ]
   },
   "hooks": {
@@ -54,6 +70,15 @@
           {
             "type": "command",
             "command": "$HOME/.claude/hooks/require-intake.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "WebSearch|WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/scope-untrusted.sh"
           }
         ]
       }

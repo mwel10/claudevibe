@@ -92,7 +92,13 @@ conversation says:
 
 - **`settings.json`** — `permissions.deny` and `permissions.ask` block or
   gate the actions Part A names as sensitive: git force-push, dropping or
-  truncating a database, reading `.env` or a secrets directory.
+  truncating a database, reading `.env` or a secrets directory. It also gates
+  writing to the guardrail's own files, since whoever can rewrite a hook
+  decides what every later session may do. Its short `permissions.allow` list
+  does the opposite job, for four files only: the baseline's own instructions,
+  settings, subagent definitions and hooks live outside every project
+  directory, so without a user-level rule each new project has to be asked
+  about them one at a time. See "Why there is an allow list" below.
 - **`hooks/check-destructive.sh`** (`PreToolUse` on Bash) — a pattern-level
   backstop for the same rules, independent of how the model interprets the
   command.
@@ -105,11 +111,18 @@ conversation says:
   rather than a sticker, since it stops matching the moment the code changes.
 - **`hooks/require-intake.sh`** (`PreToolUse` and `PostToolUse` on `Edit` and
   `Write`) — turns the intake into a precondition for writing code. See below.
+- **`hooks/scope-untrusted.sh`** (`PreToolUse` on `WebSearch` and `WebFetch`) —
+  allows a search without a question only inside a subagent whose own
+  definition declares nothing beyond read-only tools, and asks everywhere else,
+  the main conversation included. A fetch always asks, because its destination
+  is chosen by the model. See "Why a web read asks" below.
 - **`hooks/verify-settings.sh`** (`SessionStart`) — checks, at the start of
   every session, whether a project's own `.claude/settings.json` or
   `.claude/settings.local.json` contains an `allow` rule that could weaken
-  one of the global `deny` rules, and raises an active warning in the
-  session if so.
+  one of the global `deny` rules or an `ask` rule, and raises an active
+  warning in the session if so. It also reports what an enabled plugin
+  contributes, because a plugin is a third source of hooks and subagent
+  definitions that the other checks never looked at.
 - **`hooks/self-test.sh`** — not a hook, but the thing that tells you the
   hooks are real. Run it by hand: it checks the install and then verifies that
   a destructive command is actually blocked and a harmless one is not.
@@ -129,6 +142,118 @@ rather than left implicit: a `deny` rule on `Read`/`Edit` stops Claude's own
 file tools but not a subprocess that opens the file directly, and a hook
 cannot invoke the interactive `/status` command, so confirming which settings
 sources are actually active after an edit stays a manual step.
+
+#### Why there is an allow list
+
+The instructions are never the problem. `~/.claude/CLAUDE.md` is loaded into
+context when a session starts, outside the permission system entirely, so it is
+present in every project no matter what the permissions say. Opening it *as a
+file* is a different act, and it fails in a way that is easy to misread as the
+instructions not arriving at all.
+
+The reason is that the baseline's own files sit outside every project
+directory. A `Read` on `~/.claude/CLAUDE.md`, on `~/.claude/agents/`, or on the
+hooks is therefore an access beyond the working directory: a prompt in the
+default mode, and a flat refusal in `dontAsk` mode, which auto-denies anything
+not matched by an `allow` rule. `intake-scout` consulting the baseline, or a
+session checking whether a hook is the real one, runs straight into it.
+
+What makes this look like a mystery rather than a permission is where the
+approval goes. Choosing "Yes, and don't ask again" writes the rule to
+`.claude/settings.local.json` at the root of that git repository, or to the
+working directory outside git. It never reaches user settings, and there is no
+option to redirect it. So the projects where you once approved it keep working,
+every new project silently does not, and the difference lives in files you have
+no reason to look at.
+
+Hence the allow list, deliberately kept to four paths and one tool. It is not
+widened to `Read(~/.claude/**)`, because `~/.claude/projects/` holds the full
+transcript of every session in every other project, and handing that to each
+new session answers the least-privilege question in A1 backwards.
+`permissions.additionalDirectories` is not used either: it grants writing as
+well as reading. No web tool is in the list at all: `scope-untrusted.sh` decides those, and why
+a permission rule is the wrong instrument for them is the next section.
+
+The mirror image of that question is writing. Reading `~/.claude/hooks/` is a
+convenience; writing it decides what every future session is allowed to do, and
+`require-intake.sh` deliberately exempts everything outside the project
+directory, so nothing was watching those writes at all. The hooks, the agent
+definitions, `settings.json` and `CLAUDE.md` are therefore in `ask`. Not in
+`deny`, because `deny` would push ordinary maintenance into a shell command,
+which is the one channel with no check on it — and that is also the honest limit
+of these rules: an `ask` on `Edit` and `Write` does not see a `cp` or a
+`curl -o` writing the same file.
+
+#### Why a web read asks
+
+A9 says untrusted content is read inside a subagent on purpose: if a page turns
+out to be a prompt injection, it lands in a read-only context holding no shell
+and no write tool, and the damage stops there. That was advice, and advice is
+carried out by the party least able to judge whether skipping it is fine this
+once.
+
+It can be enforced, because a `PreToolUse` hook is told which context it is
+running in. Claude Code sets `agent_type` only for a subagent call, so
+`scope-untrusted.sh` can tell a web read in the main conversation, which also
+holds `Edit`, `Write` and `Bash`, from one inside a subagent.
+
+The read-only test is an allowlist, and it is worth saying why, because the
+first version got it wrong in a way nothing caught. That version asked whether
+the agent declared `Edit`, `Write` or `NotebookEdit`. An agent declaring `Bash`
+passed as a clean reader, so attacker-controlled text could land in a context
+holding a shell — the exact arrangement A9 exists to prevent — and `Task` and
+every future MCP write tool would have passed too. An agent now qualifies only
+when *every* tool it declares is one of `Read`, `Grep`, `Glob`, `WebFetch` and
+`WebSearch`.
+
+A fetch is treated differently from a search, and this is the second thing the
+first version had backwards. `WebSearch` takes a query; the destination is not
+chosen by anyone. `WebFetch` takes a URL, so allowing it unconditionally inside
+a reader turns a page that says "now fetch `https://attacker/?q=…`" into a
+network call with nothing in front of it, which is B2's last bullet and A10 in
+one move. A fetch therefore keeps its ordinary per-domain question in every
+context, including the reader.
+
+The rule is deliberately not a list of agent names. It is A9's "read-only unless
+it must write" read back out of the file that states it, which means a new
+reader agent needs no edit to the hook, and an agent that later gains `Edit` or
+`Bash` stops being trusted with the web in the same movement instead of quietly
+keeping a privilege granted under different circumstances. The scope is read
+from the frontmatter block only, and the definition has to name itself, so a
+`tools:` line in a prompt body is prose and a project file cannot be graded for
+an agent it is not.
+
+`WebSearch` is therefore not in `permissions.allow`. It was, briefly, and that
+was the wrong instrument: a permission rule cannot distinguish which context
+calls a tool, so it would have granted the main conversation exactly what A9
+wants kept out of it. Approving the prompt is always available; the point is
+that the moment becomes visible.
+
+#### Why a plugin is inspected
+
+A7 and A9 name two places a hook or a subagent definition can come from, user
+level and project level, and every check here looked at exactly those two. There
+is a third. A plugin enabled in `settings.json` can carry its own hooks, its own
+subagent definitions and its own MCP servers; plugin hooks are merged into the
+same execution as the ones in `settings.json`; and it arrives from a marketplace
+repository that nothing here reviews, pinned only by a version field its author
+controls. The documentation is blunt about the trust model: a plugin can run
+arbitrary code with your privileges.
+
+That a plugin ships only skills today says nothing about its next version, so
+the check reports the executable surface a plugin actually contributes rather
+than passing judgement on the plugin. A skills-only plugin stays silent, which
+is what keeps the warning worth reading when it does appear.
+
+`verify-settings.sh` checks at session start that the four rules are still
+there, so a settings file restored from an older copy announces itself instead
+of quietly reintroducing the problem. It also warns when a `Read` rule reaches
+past those four. The first version of that check did not: it asked only whether
+the baseline was readable, which `Read(~/.claude/**)` satisfies, so it passed on
+the exact configuration the paragraph above argues against. That is the third
+time a check in this repository verified presence rather than correctness, after
+the path comparison in the intake gate and the 404 stubs, which is why every
+check now has to be probed in both directions before it counts as installed.
 
 ### The delegation: `agents/`
 
@@ -273,6 +398,7 @@ curl --fail --remove-on-error -sSL -o ~/.claude/hooks/log-tool-call.sh     "$BAS
 curl --fail --remove-on-error -sSL -o ~/.claude/hooks/verify-settings.sh   "$BASE/hooks/verify-settings.sh"
 curl --fail --remove-on-error -sSL -o ~/.claude/hooks/require-intake.sh    "$BASE/hooks/require-intake.sh"
 curl --fail --remove-on-error -sSL -o ~/.claude/hooks/record-agent-run.sh  "$BASE/hooks/record-agent-run.sh"
+curl --fail --remove-on-error -sSL -o ~/.claude/hooks/scope-untrusted.sh   "$BASE/hooks/scope-untrusted.sh"
 curl --fail --remove-on-error -sSL -o ~/.claude/hooks/self-test.sh         "$BASE/hooks/self-test.sh"
 curl --fail --remove-on-error -sSL -o ~/.claude/hooks/lib/deny-regex.py    "$BASE/hooks/lib/deny-regex.py"
 for A in intake-scout threat-modeller security-reviewer dependency-checker untrusted-reader; do
@@ -354,6 +480,7 @@ curl --fail --remove-on-error -sSL -o ~/.claude/hooks/log-tool-call.sh     "$BAS
 curl --fail --remove-on-error -sSL -o ~/.claude/hooks/verify-settings.sh   "$BASE/hooks/verify-settings.sh"
 curl --fail --remove-on-error -sSL -o ~/.claude/hooks/require-intake.sh    "$BASE/hooks/require-intake.sh"
 curl --fail --remove-on-error -sSL -o ~/.claude/hooks/record-agent-run.sh  "$BASE/hooks/record-agent-run.sh"
+curl --fail --remove-on-error -sSL -o ~/.claude/hooks/scope-untrusted.sh   "$BASE/hooks/scope-untrusted.sh"
 curl --fail --remove-on-error -sSL -o ~/.claude/hooks/self-test.sh         "$BASE/hooks/self-test.sh"
 curl --fail --remove-on-error -sSL -o ~/.claude/hooks/lib/deny-regex.py    "$BASE/hooks/lib/deny-regex.py"
 for A in intake-scout threat-modeller security-reviewer dependency-checker untrusted-reader; do

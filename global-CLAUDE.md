@@ -299,7 +299,7 @@ alongside this file in the same repository:
 - **`verify-settings.sh`** (SessionStart) — checks at the start of every
   session whether a project-level `.claude/settings.json` or
   `.claude/settings.local.json` contains an allow rule that could weaken a
-  global deny rule, and raises an active warning in the session if so. It also
+  global deny rule or an ask rule, and raises an active warning in the session if so. It also
   checks the guardrail itself: are the hooks present, executable, and actually
   scripts rather than a downloaded error page, and can the deny patterns still
   be derived? A broken install used to be invisible, because the hook meant to
@@ -309,6 +309,29 @@ alongside this file in the same repository:
   mode that cannot ask. If this check produces output,
   treat the mechanical layer as absent until it is fixed, and tell me before
   doing anything destructive or sensitive.
+- **`scope-untrusted.sh`** (PreToolUse on WebSearch and WebFetch) — turns the
+  arrangement in A9 from advice into a decision. A hook receives `agent_type`,
+  which Claude Code sets only for a subagent call, so it can tell whether a web
+  read is happening in the main conversation, which also holds Edit, Write and
+  Bash, or inside a read-only subagent where a prompt injection has nowhere to
+  go. It allows the read when the calling agent's own definition declares a web
+  tool and declares no write tool, which is A9's "read-only unless it must
+  write" read back out of the file that states it, and it asks in every other
+  case, the main conversation included. A new reader agent therefore needs no
+  edit to the hook, and an agent that later gains `Edit` stops being trusted
+  with the web in the same movement. Do not answer its question by moving the
+  call somewhere else; answer it by delegating, or by saying why this one is
+  different.
+- **Plugin awareness in `verify-settings.sh`** — A7 and A9 name two places a
+  hook or a subagent definition can come from, and the checks looked at exactly
+  those two. There is a third: a plugin enabled in `settings.json` can carry its
+  own hooks, its own subagent definitions and its own MCP servers, it arrives
+  from a marketplace repository that nothing here reviews, and it is pinned only
+  by a version field its author controls. That a plugin ships only skills today
+  says nothing about its next version. The check reports the executable surface
+  a plugin actually contributes, so an update that adds a hook is visible at the
+  next session start instead of never. Treat that warning the way A9 says to
+  treat an unexpected `.claude/agents`: read it before trusting the session.
 - **`self-test.sh`** — not a hook, but the check that the hooks are real.
   Run `bash ~/.claude/hooks/self-test.sh` after installing or after editing
   `settings.json`. It verifies that a destructive command is actually blocked
@@ -320,6 +343,65 @@ alongside this file in the same repository:
   at runtime; neither keeps its own copy. Adding a deny rule during an
   intake (0.4) therefore reaches both the block and the warning
   automatically, without editing the hooks themselves.
+
+**The baseline's own files live outside every project.** `~/.claude/CLAUDE.md`
+is loaded into context at session start, outside the permission system, so its
+instructions are present in every project whatever the permissions say. Opening
+it as a file is a different matter, and so is opening the subagent definitions
+in `~/.claude/agents/` or the hooks themselves: those paths lie outside the
+working directory, so a `Read` on them falls through to a prompt in the default
+mode and to an outright refusal in `dontAsk` mode. An approval given for it in
+one project is written to that project's own `.claude/settings.local.json` and
+travels no further, so the rule has to live in `permissions.allow` in
+`~/.claude/settings.json` to hold everywhere:
+
+```json
+"allow": [
+  "Read(~/.claude/CLAUDE.md)",
+  "Read(~/.claude/settings.json)",
+  "Read(~/.claude/agents/**)",
+  "Read(~/.claude/hooks/**)"
+]
+```
+
+Keep it that narrow. `Read(~/.claude/**)` also hands every session the full
+transcripts of every other project under `~/.claude/projects/`, together with
+the logs and the session state, which is the scope question in A1 answered the
+wrong way round: a session writing a blog post gets reading rights over the
+work done for a different client. `permissions.additionalDirectories` is not
+the instrument either, because it grants writing as well as reading. Note also
+that in a user-level settings file a path with a single leading slash resolves
+against `~/.claude/` rather than against the project, so use the `~/` or `//`
+form. `verify-settings.sh` warns when one of those four rules is missing, and
+warns separately when a `Read` rule reaches past them, because a check that is
+satisfied by the over-broad version is checking the less important half.
+
+While `Read(~/.claude/settings.json)` is in that list, the file must never carry
+an `env` block containing a secret, nor an `apiKeyHelper` value; those belong in
+the environment or a secrets manager. The neighbouring files that do hold tokens,
+`~/.claude/.credentials.json` and `~/.claude.json`, are named in `deny` rather
+than left safe by the accident of nobody having listed them.
+
+**Reading those files is the small half of the question; writing them is the
+large one.** Whoever can write `~/.claude/hooks/`, `~/.claude/agents/` or
+`~/.claude/settings.json` decides what every future session is permitted to do,
+which makes them the most privileged sink on the machine in the sense of B2, and
+`require-intake.sh` deliberately exempts everything outside the project
+directory, so nothing else was looking at those writes. They sit in `ask` rather
+than `deny`: a confirmation each time, but still reachable, because `deny` would
+push ordinary maintenance into a shell command, and that is the one channel with
+no check at all. Be explicit about the gap that leaves, rather than describing
+these rules as protection: an `ask` rule on `Edit` and `Write` does not see a
+`cp` or a `curl -o` writing the same file. That is the subprocess limit noted
+further down, applied to the guardrail's own files.
+
+No web tool belongs in that list. `WebSearch` was briefly in it, and that was
+the wrong instrument: a permission rule cannot distinguish which context calls a
+tool, so it granted the main conversation exactly what A9 wants kept out of it.
+`scope-untrusted.sh` makes that decision instead, because a hook is told which
+context it is running in. `WebFetch` stays out for a second reason that no rule
+placement fixes: its destination is chosen by the model, so it keeps its
+per-domain question everywhere.
 
 **Known limit of this layer.** A hook cannot invoke the interactive `/status`
 command; that stays a manual step. Run `/status` and check the "Setting
