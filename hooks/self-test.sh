@@ -18,6 +18,35 @@ HOOK_DIR="$CLAUDE_DIR/hooks"
 PASS=0
 FAIL=0
 
+# Every probe below builds a fixture under mktemp -d, and several hold a copy of
+# the real settings.json and CLAUDE.md. Left behind, each run adds another copy
+# of files A7 says may one day carry an env block. They are removed on exit,
+# including on interrupt. Deletion is depth-first through find rather than a
+# recursive force remove: it is narrower, and it is not a command this
+# repository's own deny rules would have to make an exception for.
+# The list lives in a file rather than an array. scratch is called as $(scratch),
+# which runs it in a subshell, so anything it appends to a shell variable is
+# discarded the moment it returns: the first version of this cleanup registered
+# nothing and removed nothing, while looking exactly like it worked.
+TMPLIST=$(mktemp)
+cleanup() {
+  local D
+  while IFS= read -r D; do
+    case "$D" in
+      /*/*) [ -d "$D" ] && find "$D" -depth -delete 2>/dev/null || true ;;
+    esac
+  done < "$TMPLIST"
+  rm -f "$TMPLIST" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+scratch() {
+  local D
+  D=$(mktemp -d)
+  printf '%s\n' "$D" >> "$TMPLIST"
+  printf '%s' "$D"
+}
+
 ok()  { echo "  ok    $1"; PASS=$((PASS + 1)); }
 bad() { echo "  FAIL  $1"; FAIL=$((FAIL + 1)); }
 
@@ -97,8 +126,8 @@ echo "Intake gate"
 # asks about everything and a hook that asks about nothing are both useless, and
 # only one of them is obvious. HOME is redirected so none of this touches real
 # receipts. Nothing below executes a tool call; the JSON is fed to the hook.
-GATE_HOME=$(mktemp -d)
-GATE_PROJ=$(mktemp -d)
+GATE_HOME=$(scratch)
+GATE_PROJ=$(scratch)
 gate() { # $1 = file path, $2 = hook event
   printf '{"hook_event_name":"%s","tool_name":"Edit","cwd":"%s","session_id":"selftest","tool_input":{"file_path":"%s"}}' \
     "$2" "$GATE_PROJ" "$1" | HOME="$GATE_HOME" bash "$HOOK_DIR/require-intake.sh" 2>/dev/null
@@ -119,7 +148,7 @@ fi
 # The same directory reached by a second spelling. A symlink here, a different
 # case on a case-insensitive filesystem in the wild: both are path mismatches
 # that made the gate allow everything while looking installed.
-GATE_LINK="$(mktemp -d)/link"
+GATE_LINK="$(scratch)/link"
 ln -s "$GATE_PROJ" "$GATE_LINK" 2>/dev/null
 if [ -L "$GATE_LINK" ] && gate "$GATE_LINK/src/app.py" PreToolUse | grep -q '"permissionDecision": "ask"'; then
   ok "intake gate still fires when the project is reached by another path"
@@ -200,7 +229,7 @@ echo "Allow list"
 # the configuration A7 argues against and nothing noticed, because no test
 # fed it a settings file that should have failed. HOME is redirected, so the
 # real settings file is never touched.
-ALLOW_HOME=$(mktemp -d)
+ALLOW_HOME=$(scratch)
 mkdir -p "$ALLOW_HOME/.claude/hooks/lib" "$ALLOW_HOME/.claude/agents"
 cp "$HOOK_DIR"/*.sh "$ALLOW_HOME/.claude/hooks/" 2>/dev/null || true
 cp "$HOOK_DIR/lib/deny-regex.py" "$ALLOW_HOME/.claude/hooks/lib/" 2>/dev/null || true
@@ -215,6 +244,11 @@ try:
 except Exception:
     data = {}
 data.setdefault("permissions", {})["allow"] = sys.argv[3:]
+if not sys.argv[3:]:
+    # The empty case doubles as the fixture for the ask and deny presence
+    # check, so it has to be a settings file that is missing those too.
+    data["permissions"]["ask"] = []
+    data["permissions"]["deny"] = []
 # The redirected HOME has no plugin cache, so carrying enabledPlugins across
 # would make the plugin check warn and this probe would be reading that warning
 # as an allow-list failure. Each check gets a fixture that isolates it.
@@ -242,6 +276,12 @@ case "$ALLOW_OUT" in
   *) bad "allow-list check accepts Read(~/.claude/**), which also grants every session the transcripts of every other project" ;;
 esac
 
+ALLOW_OUT=$(allow_case)
+case "$ALLOW_OUT" in
+  *"permissions.ask"*) ok "the check names the ask rules that gate writing the guardrail when they are absent" ;;
+  *) bad "settings.json can lose the ask rules on ~/.claude and nothing says so, while both documents describe them as active" ;;
+esac
+
 ALLOW_OUT=$(allow_case "Read(~/.claude/CLAUDE.md)" "Read(~/.claude/settings.json)" \
                        "Read(~/.claude/agents/**)" "Read(~/.claude/hooks/**)")
 if [ -z "$ALLOW_OUT" ]; then
@@ -259,8 +299,8 @@ echo "Project overrides"
 # every command it had not thought of passed; it could not tell a malformed file
 # from an empty one; and it never looked at defaultMode, which switches off
 # every ask rule at once. HOME and the working directory are both redirected.
-OVR_HOME=$(mktemp -d)
-OVR_PROJ=$(mktemp -d)
+OVR_HOME=$(scratch)
+OVR_PROJ=$(scratch)
 mkdir -p "$OVR_HOME/.claude/hooks/lib" "$OVR_HOME/.claude/agents" "$OVR_PROJ/.claude"
 cp "$HOOK_DIR"/*.sh "$OVR_HOME/.claude/hooks/" 2>/dev/null || true
 cp "$HOOK_DIR/lib/deny-regex.py" "$OVR_HOME/.claude/hooks/lib/" 2>/dev/null || true
@@ -318,9 +358,34 @@ expect_override "" \
   '{"permissions":{"allow":["Bash(cat ~/.claude/hooks/x.sh)"]}}'
 
 expect_override "reaches a path that" \
+  "a read-only command with a redirection into a gated path is still reported" \
+  "echo or cat with a > into a gated path counts as read-only, so the hook that enforces everything else can be overwritten by a rule nobody reads" \
+  '{"permissions":{"allow":["Bash(echo x > ~/.claude/hooks/check-destructive.sh)"]}}'
+
+expect_override "reaches a path that" \
   "a gated path spelled with \$HOME is recognised" \
   "a rule written with \$HOME instead of ~ matches nothing, so the spelling decides whether the check works" \
   '{"permissions":{"allow":["Bash(cp a $HOME/.claude/hooks/)"]}}'
+
+expect_override "no command specified" \
+  "a bare Bash allow rule is reported" \
+  "an allow rule of just Bash, which permits every shell command there is, is the one form the check cannot see" \
+  '{"permissions":{"allow":["Bash"]}}'
+
+expect_override "does not have to name the gated path" \
+  "a bare tool name is treated as the widest rule it is" \
+  "an allow rule of just Edit is treated as matching nothing, so the broadest rule in the language passes" \
+  '{"permissions":{"allow":["Edit"]}}'
+
+expect_override "additionalDirectories" \
+  "a project granting additionalDirectories is reported" \
+  "additionalDirectories grants writing as well as reading and no check mentions it" \
+  '{"permissions":{"allow":[],"additionalDirectories":["~/.claude"]}}'
+
+expect_override "reaches a path that" \
+  "find with -delete is not treated as a read-only command" \
+  "find is on the read-only list although -delete and -exec both write" \
+  '{"permissions":{"allow":["Bash(find ~/.claude/hooks -name x -delete)"]}}'
 
 expect_override "defaultMode" \
   "a project defaultMode that switches off every ask rule is reported" \
@@ -347,7 +412,7 @@ echo "Untrusted-content scope"
 # in the file, so prose in a prompt body could declare a scope. Each of those is
 # now a case here. SCOPE_DIR is an empty directory used as the working
 # directory, so a real project's own .claude/agents cannot perturb the result.
-SCOPE_DIR=$(mktemp -d)
+SCOPE_DIR=$(scratch)
 mkdir -p "$SCOPE_DIR/.claude/agents"
 printf -- '---\nname: shelly\ntools: Read, Grep, WebSearch, Bash\n---\nbody\n' \
   > "$SCOPE_DIR/.claude/agents/shelly.md"
@@ -357,7 +422,7 @@ printf -- '---\nname: prosey\ndescription: x\n---\nNever write. tools: Read, Web
 # the lookup for every probe, which is the correct behaviour of the hook and the
 # wrong shape for a fixture: it made the normal case fail for the right reason
 # and hid whether the normal case worked at all.
-HIJACK_DIR=$(mktemp -d)
+HIJACK_DIR=$(scratch)
 mkdir -p "$HIJACK_DIR/.claude/agents"
 printf -- '---\nname: something-else\ntools: Read, WebSearch\n---\nbody\n' \
   > "$HIJACK_DIR/.claude/agents/untrusted-reader.md"
@@ -429,7 +494,7 @@ esac
 # The fallback has to come from the shell, not from the interpreter whose
 # absence it covers. A stub python3 that exits nonzero is the only way to probe
 # it, and the first version of the hook produced no output at all here.
-NOPY=$(mktemp -d)
+NOPY=$(scratch)
 printf '#!/bin/sh\nexit 1\n' > "$NOPY/python3"
 chmod +x "$NOPY/python3"
 SCOPE_OUT=$(printf '{"tool_name":"WebSearch","agent_type":"untrusted-reader"}' \
@@ -444,7 +509,7 @@ echo "Plugins"
 # user level and project level, and until now nothing looked at it. A plugin
 # that ships only skills today can ship a hook in its next version, from a
 # marketplace repository that is not pinned and not reviewed here.
-PLUG_HOME=$(mktemp -d)
+PLUG_HOME=$(scratch)
 mkdir -p "$PLUG_HOME/.claude/hooks/lib" "$PLUG_HOME/.claude/agents"
 cp "$HOOK_DIR"/*.sh "$PLUG_HOME/.claude/hooks/" 2>/dev/null || true
 cp "$HOOK_DIR/lib/deny-regex.py" "$PLUG_HOME/.claude/hooks/lib/" 2>/dev/null || true

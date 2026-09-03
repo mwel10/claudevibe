@@ -42,7 +42,16 @@ set -uo pipefail
 INPUT=$(cat)
 
 USER_AGENTS="$HOME/.claude/agents"
-PROJECT_AGENTS="$(pwd)/.claude/agents"
+
+# The project root, not the working directory. Started in a subdirectory,
+# $(pwd)/.claude/agents does not exist, this hook falls through to the
+# user-level definition, and grades a file that is not the one Claude Code
+# loaded: a repository shipping its own untrusted-reader with Bash in it would
+# have been graded against the shared definition and allowed.
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
+[ -n "$PROJECT_ROOT" ] || PROJECT_ROOT=$(pwd)
+PROJECT_ROOT=$(cd "$PROJECT_ROOT" 2>/dev/null && pwd -P) || PROJECT_ROOT=$(pwd)
+PROJECT_AGENTS="$PROJECT_ROOT/.claude/agents"
 
 DECIDE_PY=$(cat <<'PY'
 import json

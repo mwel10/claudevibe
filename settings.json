@@ -16,7 +16,9 @@
       "Edit(.env)",
       "Edit(.env.*)",
       "Read(~/.claude/.credentials.json)",
-      "Read(~/.claude.json)"
+      "Read(~/.claude.json)",
+      "Write(.env)",
+      "Write(.env.*)"
     ],
     "ask": [
       "Edit(~/.claude/hooks/**)",
@@ -27,6 +29,14 @@
       "Write(~/.claude/settings.json)",
       "Edit(~/.claude/CLAUDE.md)",
       "Write(~/.claude/CLAUDE.md)",
+      "Edit(~/.claude.json)",
+      "Write(~/.claude.json)",
+      "Edit(~/.claude/plugins/**)",
+      "Write(~/.claude/plugins/**)",
+      "Edit(~/.claude/commands/**)",
+      "Write(~/.claude/commands/**)",
+      "Edit(~/.claude/skills/**)",
+      "Write(~/.claude/skills/**)",
       "Bash(git push*)",
       "Bash(terraform apply*)",
       "Bash(terraform destroy*)",

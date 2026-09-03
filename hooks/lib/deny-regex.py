@@ -48,6 +48,22 @@ def representative(pattern):
     return pattern.replace("**", "seg/leaf").replace("*", "seg")
 
 
+def probes(pattern):
+    """Several concrete paths the pattern matches.
+
+    One probe under-matches: a rule shaped ** at one depth is not matched by an
+    allow pattern written for another, so a wider rule could still slip past by
+    accident of depth rather than by intent.
+    """
+    depths = ("seg/leaf", "seg", "seg/mid/leaf")
+    seen = []
+    for depth in depths:
+        candidate = pattern.replace("**", depth).replace("*", "seg")
+        if candidate not in seen:
+            seen.append(candidate)
+    return seen
+
+
 def main():
     # A flag given as the last argument used to raise IndexError, which every
     # caller swallows, and an empty ask list warns about nothing at all: the
@@ -117,6 +133,8 @@ def main():
                 "variants": variants,
                 "probe": representative(inner.replace("~/", home + "/", 1)
                                         if inner.startswith("~/") else inner),
+                "probes": probes(inner.replace("~/", home + "/", 1)
+                                 if inner.startswith("~/") else inner),
             }
             line = json.dumps(record, sort_keys=True)
             if line not in seen:

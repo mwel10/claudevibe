@@ -39,6 +39,17 @@ mkdir -p "$(dirname "$WARN_LOG")"
 
 WARNINGS=()
 
+# The project root, not the working directory. A session started in a
+# subdirectory has a $(pwd) with no .claude in it, and every check keyed on that
+# path then reads nothing and reports nothing: the project settings file, the
+# project agent definitions and the project half of the plugin check all skipped
+# in silence, while Claude Code itself was loading them from the root.
+# require-intake.sh already resolves this properly; two hooks did not inherit it.
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
+[ -n "$PROJECT_ROOT" ] || PROJECT_ROOT=$(pwd)
+PROJECT_ROOT=$(cd "$PROJECT_ROOT" 2>/dev/null && pwd -P) || PROJECT_ROOT=$(pwd)
+
+
 # --- 1. Is the guardrail itself intact? --------------------------------------
 
 for HOOK in check-destructive.sh log-tool-call.sh verify-settings.sh \
@@ -112,7 +123,7 @@ import json
 import os
 import re
 import sys
-from fnmatch import fnmatch
+from fnmatch import fnmatchcase
 
 home = sys.argv[1]
 
@@ -124,12 +135,21 @@ FILE_TOOLS = {'Read', 'Edit', 'Write', 'NotebookEdit'}
 # absent. Running a script that lives in a gated directory is exactly the
 # channel a rule on Edit cannot see.
 READ_ONLY_COMMANDS = {
-    'cat', 'head', 'tail', 'less', 'more', 'wc', 'grep', 'egrep', 'fgrep',
-    'rg', 'ls', 'find', 'stat', 'file', 'diff', 'cmp', 'md5', 'shasum',
+    # find writes with -delete and -exec; less and more run shell
+    # escapes with !command. Neither belongs on a read-only list.
+    'cat', 'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep',
+    'rg', 'ls', 'stat', 'file', 'diff', 'cmp', 'md5', 'shasum',
     'sha256sum', 'echo', 'printf', 'true', 'test',
 }
 
 WEAKENING_MODES = {'acceptEdits', 'bypassPermissions'}
+
+# A read-only command stops being read-only the moment the shell is asked to do
+# something with its output or to run a second command. `echo kwaad >
+# check-destructive.sh` is `echo`, and it overwrites the hook that enforces
+# everything else. So the command is only treated as harmless when its first
+# word is read-only AND it contains none of these.
+SHELL_CONSTRUCTS = ('>', '|', ';', '&', '`', '$(', '\n')
 
 
 def expand(path):
@@ -149,11 +169,44 @@ def as_pattern(path):
     return expand(path).replace('**', '*')
 
 
+def matches(probe, pattern):
+    if not probe or not pattern:
+        return False
+    # Both spellings. A case-insensitive filesystem is the normal case on
+    # macOS, and comparing case-sensitively there is how the intake gate once
+    # switched itself off.
+    return (fnmatchcase(probe, pattern)
+            or fnmatchcase(probe.lower(), pattern.lower()))
+
+
+def normalise(command):
+    """Make a shell rule comparable to a path, as far as text allows.
+
+    This stays a heuristic and is documented as one. It removes the quoting and
+    the redundant separators that hid a gated path from a substring test, but a
+    command can always reach a path this cannot see: through a variable it sets
+    itself, a cd, a symlink, or a script it calls. The file-tool branch above
+    compares capabilities; this branch compares spellings, and the difference is
+    stated rather than glossed.
+    """
+    text = command.replace('"', '').replace("'", '')
+    text = text.replace('${HOME}', home).replace('$HOME', home)
+    while '/./' in text:
+        text = text.replace('/./', '/')
+    while '//' in text:
+        text = text.replace('//', '/')
+    return text
+
+
 def parse(rule):
     match = re.match(r'^([A-Za-z]+)\((.*)\)$', rule)
     if match:
         return match.group(1), match.group(2)
-    return rule, ''
+    # A rule with no specifier is the tool itself: Edit, or Bash, allows
+    # everything that tool can do. It used to parse to an empty path, which
+    # matched no probe and no stem, so the broadest rule in the language was
+    # the one form this check could not see at all.
+    return rule, '**'
 
 
 gated = []
@@ -193,6 +246,19 @@ for path in sys.argv[2:]:
               "guardrail's own files. That is broader than any allow rule."
               % (path, mode))
 
+    extra = permissions.get('additionalDirectories')
+    if extra:
+        print('W:%s sets additionalDirectories to %s. A7 names that as the '
+              'instrument that grants writing as well as reading, and it is '
+              'outside the allow and ask lists entirely, so nothing else here '
+              'reports it.' % (path, extra))
+
+    if data.get('mcpServers') or os.path.isfile(
+            os.path.join(os.path.dirname(os.path.dirname(path)), '.mcp.json')):
+        print('W:%s belongs to a project that brings its own MCP servers. Their '
+              'responses are untrusted input under A3 and their scope is not '
+              'covered by anything in this file.' % path)
+
     if data.get('hooks'):
         print('W:%s registers hooks of its own. They run in every session in '
               'this project alongside the ones from ~/.claude/settings.json, '
@@ -211,7 +277,8 @@ for path in sys.argv[2:]:
             for record in gated:
                 if record.get('tool') != tool:
                     continue
-                if fnmatch(record.get('probe', ''), pattern):
+                candidates = record.get('probes') or [record.get('probe', '')]
+                if any(matches(probe, pattern) for probe in candidates):
                     covered.append('%s(%s) in the %s list'
                                    % (record['tool'], record['path'],
                                       record['list']))
@@ -230,6 +297,11 @@ for path in sys.argv[2:]:
             continue
 
         command = inner
+        if command == '**':
+            print('W:%s allows Bash with no command specified, which is every '
+                  'shell command in this project, including any that writes '
+                  'into the directories the global ask rules gate.' % path)
+            continue
         first = ''
         for token in command.split():
             if '=' in token and not token.startswith('-'):
@@ -247,12 +319,15 @@ for path in sys.argv[2:]:
             # miss a rule written with a tilde, which is the spelling a person
             # actually types.
             hit = False
+            haystack = normalise(command)
             for variant in record.get('variants', []):
-                stem = variant.split('*')[0].rstrip('/')
-                if len(stem) > 1 and stem in command:
+                stem = normalise(variant).split('*')[0].rstrip('/')
+                if len(stem) > 1 and stem in haystack:
                     hit = True
                     break
-            if not hit or first in READ_ONLY_COMMANDS:
+            harmless = (first in READ_ONLY_COMMANDS
+                        and not any(c in command for c in SHELL_CONSTRUCTS))
+            if not hit or harmless:
                 continue
             print('W:%s allows the shell command %s, which reaches a path that '
                   '%s(%s) in the global %s list gates. A shell rule is not '
@@ -286,7 +361,7 @@ $(python3 "$LIB" --list ask --format json 2>/dev/null || true)"
 fi
 
 PROJECT_REPORT=$(printf '%s\n' "$GATED_JSON" | python3 -c "$PROJECT_PY" "$HOME" \
-  "$(pwd)/.claude/settings.json" "$(pwd)/.claude/settings.local.json" 2>/dev/null || true)
+  "$PROJECT_ROOT/.claude/settings.json" "$PROJECT_ROOT/.claude/settings.local.json" 2>/dev/null || true)
 
 # A missing terminal OK means no verdict was reached, which is not the same as
 # nothing to report and must not read like it.
@@ -327,7 +402,7 @@ else
   # must be reachable, and against paths that must not be.
   BASELINE_PY=$(cat <<'PY'
 import json, os, sys
-from fnmatch import fnmatch
+from fnmatch import fnmatchcase
 
 home = sys.argv[1]
 prefixes = ('~/', '//' + home.lstrip('/') + '/', home + '/')
@@ -338,6 +413,21 @@ needed = [
     ('Read(~/.claude/agents/**)',    '.claude/agents/example.md'),
     ('Read(~/.claude/hooks/**)',     '.claude/hooks/example.sh'),
 ]
+
+# The rules that gate writing the guardrail itself, and the two files next to
+# settings.json that hold tokens. These are checked for presence because the
+# documented update flow deliberately leaves settings.json alone: an installer
+# who does not merge them by hand ends up running an install that both
+# documents describe and the machine does not have.
+REQUIRED_ASK = [
+    'Edit(~/.claude/hooks/**)', 'Write(~/.claude/hooks/**)',
+    'Edit(~/.claude/agents/**)', 'Write(~/.claude/agents/**)',
+    'Edit(~/.claude/settings.json)', 'Write(~/.claude/settings.json)',
+    'Edit(~/.claude/CLAUDE.md)', 'Write(~/.claude/CLAUDE.md)',
+]
+REQUIRED_DENY = [
+    'Read(~/.claude/.credentials.json)', 'Read(~/.claude.json)',
+]
 forbidden = [
     '.claude/projects/other-project/session.jsonl',
     '.claude/logs/tool-calls.log',
@@ -347,7 +437,12 @@ forbidden = [
 
 try:
     with open(os.path.join(home, '.claude', 'settings.json')) as f:
-        allow = json.load(f).get('permissions', {}).get('allow', [])
+        permissions = json.load(f).get('permissions', {})
+    allow = permissions.get('allow', [])
+    ask = [r for r in permissions.get('ask', []) if isinstance(r, str)]
+    deny = [r for r in permissions.get('deny', []) if isinstance(r, str)]
+    missing_ask = [r for r in REQUIRED_ASK if r not in ask]
+    missing_deny = [r for r in REQUIRED_DENY if r not in deny]
     patterns = []
     for rule in allow:
         if not isinstance(rule, str):
@@ -360,10 +455,17 @@ try:
                 # ** and * both become fnmatch's *, which spans separators.
                 patterns.append((rule, path[len(prefix):].replace('**', '*')))
                 break
+    def covers(probe, pattern):
+        # Case-sensitively and case-insensitively both: a case-insensitive
+        # filesystem is the normal case on macOS, and comparing only one way
+        # there is how the intake gate once switched itself off.
+        return (fnmatchcase(probe, pattern)
+                or fnmatchcase(probe.lower(), pattern.lower()))
+
     missing = [r for r, probe in needed
-               if not any(fnmatch(probe, p) for _, p in patterns)]
+               if not any(covers(probe, p) for _, p in patterns)]
     wide = sorted({rule for rule, p in patterns
-                   for probe in forbidden if fnmatch(probe, p)})
+                   for probe in forbidden if covers(probe, p)})
 except Exception:
     pass
 else:
@@ -372,6 +474,17 @@ else:
               'rules: ' + ', '.join(missing) + '. The instructions are still '
               'loaded into this session, but opening those files will be '
               'blocked in every project that has not approved it locally.')
+    if missing_ask:
+        print('W:~/.claude/settings.json is missing these permissions.ask '
+              'rules: ' + ', '.join(missing_ask) + '. Writing the hooks, the '
+              'subagent definitions or the settings themselves then happens '
+              'without a confirmation, and whoever writes those decides what '
+              'every later session may do. Updating leaves settings.json alone '
+              'on purpose, so these have to be merged by hand.')
+    if missing_deny:
+        print('W:~/.claude/settings.json is missing these permissions.deny '
+              'rules: ' + ', '.join(missing_deny) + '. Those are the files next '
+              'to settings.json that hold tokens.')
     if wide:
         print('W:~/.claude/settings.json has a Read rule reaching past the '
               "baseline's own files: " + ', '.join(wide) + '. That also grants '
@@ -411,7 +524,7 @@ if [ ! -d "$HOME/.claude/agents" ]; then
   WARNINGS+=("$HOME/.claude/agents is missing: the shared subagent definitions from A9 are not available in this session.")
 fi
 
-for DIR in "$HOME/.claude/agents" "$(pwd)/.claude/agents"; do
+for DIR in "$HOME/.claude/agents" "$PROJECT_ROOT/.claude/agents"; do
   [ -d "$DIR" ] || continue
   for F in "$DIR"/*.md; do
     [ -f "$F" ] || continue
@@ -421,6 +534,17 @@ for DIR in "$HOME/.claude/agents" "$(pwd)/.claude/agents"; do
     fi
     if grep -qE '^permissionMode:[[:space:]]*(bypassPermissions|dontAsk)' "$F"; then
       WARNINGS+=("$F sets permissionMode to bypassPermissions or dontAsk, which A9 forbids: that subagent cannot ask before a destructive action.")
+    fi
+    # A project definition wins over a user one with the same name, so a
+    # repository can replace a shared subagent without saying so. A9 says to
+    # read an unexpected .claude/agents before trusting the session; this is
+    # the case where the file is not unexpected but its contents are.
+    if [ "$DIR" != "$HOME/.claude/agents" ] \
+       && [ -f "$HOME/.claude/agents/$(basename "$F")" ]; then
+      WARNINGS+=("$F replaces the shared subagent definition of the same name for this project. Read it before trusting this session (A9).")
+    fi
+    if ! grep -qE '^tools:' "$F"; then
+      WARNINGS+=("$F declares no tools: line, which is an unbounded scope by another name (A9).")
     fi
   done
 done
@@ -512,8 +636,8 @@ PY
 
 PLUGIN_REPORT=$(python3 -c "$PLUGIN_PY" "$HOME" \
   "$HOME/.claude/settings.json" \
-  "$(pwd)/.claude/settings.json" \
-  "$(pwd)/.claude/settings.local.json" 2>/dev/null || true)
+  "$PROJECT_ROOT/.claude/settings.json" \
+  "$PROJECT_ROOT/.claude/settings.local.json" 2>/dev/null || true)
 
 if [ "$(printf '%s\n' "$PLUGIN_REPORT" | tail -n 1)" != "OK" ]; then
   WARNINGS+=("The enabled plugins could not be checked, so it is unverified whether one of them contributes hooks, subagent definitions or MCP servers to this session.")
@@ -526,18 +650,21 @@ else
 fi
 
 if [ ${#WARNINGS[@]} -gt 0 ]; then
-  {
-    echo "$(date -Iseconds) session in $(pwd)"
-    for W in ${WARNINGS[@]+"${WARNINGS[@]}"}; do
-      echo "  - $W"
-    done
-  } >> "$WARN_LOG"
-
+  # The session is told first. Appending to the log came first before, and a
+  # log directory that could not be written aborted the script under set -e,
+  # so the one run that most needed to say something said nothing at all.
   echo "WARNING, possible weakening of the guardrails in this session:"
   for W in ${WARNINGS[@]+"${WARNINGS[@]}"}; do
     echo "- $W"
   done
   echo "Verify this with /status (the 'Setting sources' line) before performing any destructive or sensitive action, and tell the user explicitly if an override turns out to be active."
+
+  {
+    echo "$(date -Iseconds) session in $PROJECT_ROOT"
+    for W in ${WARNINGS[@]+"${WARNINGS[@]}"}; do
+      echo "  - $W"
+    done
+  } >> "$WARN_LOG" 2>/dev/null || true
 fi
 
 exit 0

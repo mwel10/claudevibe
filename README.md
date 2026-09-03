@@ -232,6 +232,26 @@ calls a tool, so it would have granted the main conversation exactly what A9
 wants kept out of it. Approving the prompt is always available; the point is
 that the moment becomes visible.
 
+#### What the web scope hook does not cover
+
+`scope-untrusted.sh` is registered on `WebSearch` and `WebFetch`, and those are
+the two tools it sees. `Bash(curl …)`, `Bash(wget …)` and a fetch provided by an
+MCP server pull the same page into the same context and meet no scope check at
+all. This is the A7 subprocess limit again, in a second place: a rule about a
+tool is not a rule about an act. Say so rather than describing the property as
+if it held for web reading in general, and if it has to hold regardless of the
+route, the place for it is a deny rule on the Bash side or a network policy, not
+this hook.
+
+The comparison in `verify-settings.sh` has a matching seam. Its file-tool branch
+compares capabilities, as described above. Its Bash branch compares text: it
+normalises quoting, `$HOME` and redundant separators, and then asks whether a
+gated path appears in the command. A command can always reach a path that test
+cannot see, through a variable it sets itself, a `cd`, a symlink, or a script it
+calls. Three deny rules that begin with a glob — `*/secrets/**`, `*/.aws/**`,
+`*id_rsa*` — have no fixed stem to look for at all and are not compared against
+Bash rules. The branch is a heuristic and is documented as one.
+
 #### Why a plugin is inspected
 
 A7 and A9 name two places a hook or a subagent definition can come from, user
@@ -265,8 +285,11 @@ from the same shift, and each was a silence before:
   is reported unless its command is one of a short list that cannot write. The
   earlier version listed the commands that *do* write, which meant `touch`,
   `tar -x`, `git checkout` and everything else nobody thought of passed
-  quietly. `bash` is deliberately not on the read-only list: running a script
-  that lives in the gated directory is exactly the channel the rule cannot see.
+  quietly. A read-only command also stops being one the moment a redirection or
+  a second command appears, so `echo x > check-destructive.sh` is reported even
+  though `echo` is on the list. `bash` is deliberately not on that list at all:
+  running a script that lives in the gated directory is exactly the channel the
+  rule cannot see.
 - A `defaultMode` of `acceptEdits` or `bypassPermissions` switches off every
   `ask` rule in a project at once, more completely than any allow rule, and
   nothing had ever looked at it.
@@ -497,6 +520,15 @@ intakes it has drifted from the copy in this repository, deliberately. An update
 that overwrites it deletes your own rules and says nothing, and you find out
 when something gets through that you had specifically blocked.
 
+Two things follow from that, and the second is easy to miss. The update below
+leaves `settings.json` alone, so any rule a later release *adds* to it never
+reaches you: the `permissions.allow` block that makes the baseline's own files
+readable, the `ask` rules that gate writing the hooks, and the `deny` rules on
+the two files next to `settings.json` that hold tokens are all in that category.
+`verify-settings.sh` now checks for each of them at session start and says which
+are missing, so the merge is a prompted step rather than a silent divergence,
+but it is still a merge you do by hand.
+
 So update the instructions, the hooks and the subagent definitions, and leave
 `settings.json` out of it:
 
@@ -520,13 +552,20 @@ chmod +x ~/.claude/hooks/*.sh
 Then read what changed in `settings.json` upstream instead of taking it:
 
 ```bash
-curl --fail --remove-on-error -sSL -o /tmp/claudevibe-settings.json "$BASE/settings.json"
-diff ~/.claude/settings.json /tmp/claudevibe-settings.json
+UPSTREAM=$(mktemp)
+curl --fail --remove-on-error -sSL -o "$UPSTREAM" "$BASE/settings.json"
+diff ~/.claude/settings.json "$UPSTREAM"
 ```
 
-Two kinds of change turn up in that diff and they are not equally optional. New
-`deny` or `ask` patterns are a judgement call, and yours are quite possibly
-already stricter. A new entry under `hooks` is not a judgement call. When a
+A fixed path such as `/tmp/upstream.json` would follow a symlink already sitting
+there, which is why that is an `mktemp`.
+
+Three kinds of change turn up in that diff and they are not equally optional.
+A new `deny` pattern is a judgement call, and yours are quite possibly already
+stricter. A new entry under `hooks` is not a judgement call, and neither are the
+`permissions.allow` block and the `ask` rules on `~/.claude`: those are what
+make the baseline's own files readable and gate writing them, and
+`verify-settings.sh` names each one it cannot find at session start. When a
 release adds a hook, the script arrives with the update above and nothing wires
 it into `settings.json` for you, and a hook Claude Code was never told to run is
 as inert as one of the 404 stubs. Merge any `hooks` block the diff shows.

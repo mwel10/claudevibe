@@ -46,13 +46,18 @@ the guardrail's own source, not only to its installed copy.
   that matters is the GitHub account that controls what installers receive.
 - **Environments and how they are separated:** None. `main` is production for
   installers, with no tag, release or version pin in the install instructions.
-  The only real isolation is in `self-test.sh`, which redirects `HOME` to a
-  temporary directory so its probes never touch real state.
+  `self-test.sh` redirects `HOME` to a temporary directory for its probes and
+  removes those on exit, but its final check runs `verify-settings.sh` under the
+  real `HOME`, and the deny-pattern and intake-gate checks read the real
+  settings and working directory, so a project settings file in the current
+  directory can change what it reports.
 - **Credentials and where secrets come from:** The project needs none and reads
   none. Deny rules cover `.env`, `*/secrets/**`, `*/.aws/**`, `*id_rsa*`,
-  `~/.claude/.credentials.json` and `~/.claude.json`. While
-  `Read(~/.claude/settings.json)` is in the allow list, that file must never
-  carry an `env` secret or an `apiKeyHelper` value. The subprocess limit in A7
+  `~/.claude/.credentials.json` and `~/.claude.json`. The allow list grants a
+  standing `Read` on four `~/.claude` paths in *every* project, which is a real
+  widening: a session opened for unrelated work can open the baseline, the
+  subagent definitions, the hooks and `settings.json`. That last one is why the
+  file must never carry an `env` secret or an `apiKeyHelper` value. The subprocess limit in A7
   applies throughout: these rules stop Claude's own file tools, not a script
   that opens the file directly.
 - **Destructive actions in this project:** Not data loss. The destructive act is
@@ -64,11 +69,15 @@ the guardrail's own source, not only to its installed copy.
   with no rollback point.
 - **What the session-start check does and does not see:** it compares a project
   settings file against the global rules by capability rather than by spelling,
-  so an allow rule wider than a gated path is caught, a shell rule reaching that
-  path is reported unless its command cannot write, `defaultMode` and a project
-  `hooks` block are reported, and a file it cannot parse is reported rather than
-  read as empty. What it still cannot see is anything that is not a tool call,
-  per the boundary in A7.
+  so an allow rule wider than a gated path is caught, a bare tool name is caught,
+  `defaultMode`, `additionalDirectories`, a project `hooks` block and project MCP
+  servers are reported, and a file it cannot parse is reported rather than read
+  as empty. The Bash branch is different in kind and is a heuristic: it compares
+  the text of a command against the gated paths after normalising quoting and
+  `$HOME`, so a command reaching a path through a variable, a `cd` or a script it
+  calls is not seen, and three deny rules beginning with a glob are not compared
+  against shell rules at all. Beyond that it sees nothing that is not a tool
+  call, per the boundary in A7.
 - **Approval gate and how it is enforced:** Weak, and mostly not enforced.
   `Bash(git push*)` is in `ask` and force-push in `deny`, so a push *through
   Claude Code* prompts. Nothing else holds: `.github/` contains only
