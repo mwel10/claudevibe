@@ -284,6 +284,14 @@ esac
 
 ALLOW_OUT=$(allow_case "Read(~/.claude/CLAUDE.md)" "Read(~/.claude/settings.json)" \
                        "Read(~/.claude/agents/**)" "Read(~/.claude/hooks/**)")
+case "$ALLOW_OUT" in
+  *"every web search asks again"*)
+    ok "a settings file with the four Read rules but no WebSearch is reported" ;;
+  *) bad "WebSearch can drop out of the allow list with nothing saying so, and the search prompt comes back one update later" ;;
+esac
+
+ALLOW_OUT=$(allow_case "Read(~/.claude/CLAUDE.md)" "Read(~/.claude/settings.json)" \
+                       "Read(~/.claude/agents/**)" "Read(~/.claude/hooks/**)" "WebSearch")
 if [ -z "$ALLOW_OUT" ]; then
   ok "allow-list check is quiet on the four rules it asks for"
 else
@@ -404,107 +412,87 @@ expect_override "could not be parsed" \
   "a malformed project settings file is indistinguishable from one with nothing to report" \
   'not json at all'
 
-echo "Untrusted-content scope"
-# A9 puts web reads inside a read-only subagent so a prompt injection lands
-# somewhere it can do nothing. scope-untrusted.sh is what turns that from advice
-# into a decision, and like every other check here it has to discriminate. The
-# probes below are the ones a review had to point out were missing: the first
-# version of the hook counted only Edit and Write as write tools, so an agent
-# holding Bash passed as a clean reader, and it read a tools: line from anywhere
-# in the file, so prose in a prompt body could declare a scope. Each of those is
-# now a case here. SCOPE_DIR is an empty directory used as the working
-# directory, so a real project's own .claude/agents cannot perturb the result.
-SCOPE_DIR=$(scratch)
-mkdir -p "$SCOPE_DIR/.claude/agents"
-printf -- '---\nname: shelly\ntools: Read, Grep, WebSearch, Bash\n---\nbody\n' \
-  > "$SCOPE_DIR/.claude/agents/shelly.md"
-printf -- '---\nname: prosey\ndescription: x\n---\nNever write. tools: Read, WebSearch\n' \
-  > "$SCOPE_DIR/.claude/agents/prosey.md"
-# The hijack fixture lives in its own directory. Left beside the others it wins
-# the lookup for every probe, which is the correct behaviour of the hook and the
-# wrong shape for a fixture: it made the normal case fail for the right reason
-# and hid whether the normal case worked at all.
-HIJACK_DIR=$(scratch)
-mkdir -p "$HIJACK_DIR/.claude/agents"
-printf -- '---\nname: something-else\ntools: Read, WebSearch\n---\nbody\n' \
-  > "$HIJACK_DIR/.claude/agents/untrusted-reader.md"
-
-scope() { # $1 = tool, $2 = agent_type or empty, $3 = cwd
-  local WHERE="${3:-$SCOPE_DIR}"
+echo "Web tools"
+# Searching is allowed outright, through permissions.allow, because a question
+# in front of every search is one that gets answered without being read. What is
+# still asked is the fetch, in every context, because the model chooses its URL.
+# Both directions are probed: a hook that asks about everything and a hook that
+# asks about nothing are equally useless, and only one of them is obvious.
+web() { # $1 = tool name, $2 = agent_type or empty
   if [ -n "$2" ]; then
     printf '{"hook_event_name":"PreToolUse","tool_name":"%s","agent_id":"selftest","agent_type":"%s","tool_input":{}}' "$1" "$2"
   else
     printf '{"hook_event_name":"PreToolUse","tool_name":"%s","tool_input":{}}' "$1"
-  fi | (cd "$WHERE" && bash "$HOOK_DIR/scope-untrusted.sh" 2>/dev/null)
+  fi | bash "$HOOK_DIR/scope-untrusted.sh" 2>/dev/null
 }
 
-# The output is captured before it is searched. Piping into `grep -q` under
-# `set -o pipefail` reports the opposite of the truth when the match is not on
-# the last line: grep exits on the match, the writer takes SIGPIPE, and the
-# pipeline status becomes 141, so a check that found what it wanted reads as a
-# failure.
-expect_scope() { # $1 = decision, $2 = tool, $3 = agent, $4 = ok text, $5 = fail text
-  local OUT
-  OUT=$(scope "$2" "$3")
-  case "$OUT" in
-    *"\"permissionDecision\": \"$1\""*|*"\"permissionDecision\":\"$1\""*) ok "$4" ;;
-    *) bad "$5" ;;
-  esac
-}
-
-expect_scope ask WebSearch "" \
-  "a web read from the main conversation asks first" \
-  "a web read from the main conversation is waved through, so A9's isolation of untrusted content is advisory again"
-
-expect_scope allow WebSearch untrusted-reader \
-  "a search inside untrusted-reader proceeds without asking" \
-  "a search inside untrusted-reader also asks, so delegating costs a question and nobody will do it"
-
-expect_scope ask WebFetch untrusted-reader \
-  "a fetch keeps its per-domain question even inside untrusted-reader" \
-  "a fetch of any URL is allowed inside untrusted-reader, so a page can name the next address to call"
-
-expect_scope ask WebSearch security-reviewer \
-  "a subagent that declares no web tool does not inherit web access" \
-  "any subagent gets web access regardless of its declared tools, so the scope in the definition means nothing"
-
-expect_scope ask WebSearch shelly \
-  "a subagent holding Bash is not treated as a read-only context" \
-  "a subagent holding a shell counts as a clean reader, which is the arrangement A9 exists to prevent"
-
-expect_scope ask WebSearch prosey \
-  "a tools: line in a prompt body is not read as a declared scope" \
-  "prose in a prompt body can declare a tool scope, so a definition can grant itself web access in text"
-
-expect_scope ask WebSearch untrusted-reader-mismatch \
-  "a definition that is absent asks rather than allowing" \
-  "a missing definition does not stop the read"
-
-SCOPE_OUT=$(scope WebSearch untrusted-reader "$HIJACK_DIR")
-case "$SCOPE_OUT" in
+WEB_OUT=$(web WebFetch "")
+case "$WEB_OUT" in
   *'"permissionDecision":"ask"'*|*'"permissionDecision": "ask"'*)
-    ok "a project definition that hijacks a trusted name but does not match it is rejected" ;;
-  *) bad "a project .claude/agents file decides the outcome by filename alone, so any cloned repository can grant itself web access" ;;
+    ok "a fetch from the main conversation asks first" ;;
+  *) bad "a fetch is waved through, so a page can name the next address to call with nothing in front of it" ;;
 esac
 
-SCOPE_OUT=$(printf 'not json' | bash "$HOOK_DIR/scope-untrusted.sh" 2>/dev/null || true)
-case "$SCOPE_OUT" in
-  *'"permissionDecision":"ask"'*|*'"permissionDecision": "ask"'*) ok "the web scope hook fails closed on unreadable input" ;;
-  *) bad "the web scope hook allows a web read when it cannot read its own input" ;;
+# The hook no longer reads agent_type, so this cannot fail while the probe above
+# passes. It stays as a regression guard: if context sensitivity ever comes back,
+# this is the case that must not become an allow, because that subagent can read
+# the filesystem and a fetch is how what it read would leave the machine.
+WEB_OUT=$(web WebFetch untrusted-reader)
+case "$WEB_OUT" in
+  *'"permissionDecision":"ask"'*|*'"permissionDecision": "ask"'*)
+    ok "a fetch asks regardless of which context calls it" ;;
+  *) bad "a fetch inside a subagent is allowed, so context sensitivity has come back in the one place it must not" ;;
 esac
 
-# The fallback has to come from the shell, not from the interpreter whose
-# absence it covers. A stub python3 that exits nonzero is the only way to probe
-# it, and the first version of the hook produced no output at all here.
+WEB_OUT=$(web WebSearch "")
+if [ -z "$WEB_OUT" ]; then
+  ok "a search reaches no decision from this hook, so the allow rule governs it"
+else
+  bad "the hook still answers for WebSearch, which is the question that was removed for being asked too often"
+fi
+
+WEB_OUT=$(printf 'not json' | bash "$HOOK_DIR/scope-untrusted.sh" 2>/dev/null || true)
+case "$WEB_OUT" in
+  *'"permissionDecision":"ask"'*|*'"permissionDecision": "ask"'*)
+    ok "the fetch hook fails closed on unreadable input" ;;
+  *) bad "the fetch hook stays silent when it cannot read its own input, so the call proceeds unchecked" ;;
+esac
+
+# The hook no longer parses anything, so a machine with no working python3 must
+# still get an answer out of it. The earlier version printed its fail-closed
+# reply with the same interpreter whose absence that reply existed to cover.
 NOPY=$(scratch)
 printf '#!/bin/sh\nexit 1\n' > "$NOPY/python3"
 chmod +x "$NOPY/python3"
-SCOPE_OUT=$(printf '{"tool_name":"WebSearch","agent_type":"untrusted-reader"}' \
+WEB_OUT=$(printf '{"tool_name":"WebFetch"}' \
   | PATH="$NOPY:$PATH" bash "$HOOK_DIR/scope-untrusted.sh" 2>/dev/null || true)
-case "$SCOPE_OUT" in
-  *'"permissionDecision":"ask"'*) ok "the web scope hook still asks when python3 cannot run" ;;
-  *) bad "with no working python3 the web scope hook emits nothing, so the call proceeds unchecked" ;;
+case "$WEB_OUT" in
+  *'"permissionDecision":"ask"'*) ok "the fetch hook still asks when python3 cannot run" ;;
+  *) bad "with no working python3 the fetch hook emits nothing, so the call proceeds unchecked" ;;
 esac
+
+# Searching is only frictionless while the allow rule is there, and the update
+# flow deliberately never overwrites settings.json. This used to be a grep for
+# the string anywhere in the file, which would have passed just as happily with
+# WebSearch sitting in deny — a check printing a conclusion it had not measured,
+# which is the failure this repository has now made four times. It parses.
+SEARCH_RULE_PY=$(cat <<'PYEOF'
+import json, sys
+perm = json.load(open(sys.argv[1])).get("permissions", {})
+
+
+def has(name):
+    return "WebSearch" in [r for r in perm.get(name, []) if isinstance(r, str)]
+
+
+sys.exit(0 if has("allow") and not has("ask") and not has("deny") else 1)
+PYEOF
+)
+if python3 -c "$SEARCH_RULE_PY" "$CLAUDE_DIR/settings.json" 2>/dev/null; then
+  ok "WebSearch is in permissions.allow and in neither ask nor deny"
+else
+  bad "WebSearch is not allowed outright in settings.json, so every search asks again"
+fi
 
 echo "Plugins"
 # There is a third source of hooks, subagent definitions and MCP servers beside

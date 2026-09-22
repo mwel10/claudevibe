@@ -447,6 +447,11 @@ needed = [
 # who does not merge them by hand ends up running an install that both
 # documents describe and the machine does not have.
 REQUIRED_ASK = [
+    # WebFetch is here so the per-call guarantee the documents make holds at
+    # the permission layer as well as in the hook. Ask is evaluated before
+    # allow across every settings source, so a project allow rule, or a
+    # remembered per-domain approval, cannot take it away.
+    'WebFetch',
     'Edit(~/.claude/hooks/**)', 'Write(~/.claude/hooks/**)',
     'Edit(~/.claude/agents/**)', 'Write(~/.claude/agents/**)',
     'Edit(~/.claude/settings.json)', 'Write(~/.claude/settings.json)',
@@ -491,6 +496,12 @@ try:
 
     missing = [r for r, probe in needed
                if not any(covers(probe, p) for _, p in patterns)]
+    # WebSearch is a bare tool rule with no path, so it is not among the probes
+    # above, and it does not belong in the same warning either: nothing about
+    # file reachability is affected by its absence, and a reader acting on that
+    # diagnosis would widen their Read rules, which is the thing A7 spends a
+    # paragraph preventing.
+    search_allowed = 'WebSearch' in [r for r in allow if isinstance(r, str)]
     wide = sorted({rule for rule, p in patterns
                    for probe in forbidden if covers(probe, p)})
 except Exception:
@@ -501,6 +512,13 @@ else:
               'rules: ' + ', '.join(missing) + '. The instructions are still '
               'loaded into this session, but opening those files will be '
               'blocked in every project that has not approved it locally.')
+    if not search_allowed:
+        print('W:~/.claude/settings.json does not list WebSearch in '
+              'permissions.allow, so every web search asks again. That is the '
+              'reflexive approval this baseline warns about elsewhere, and it '
+              'buries the WebFetch prompt that carries real information. '
+              'Updating leaves settings.json alone on purpose, so this one has '
+              'to be merged by hand.')
     if missing_ask:
         print('W:~/.claude/settings.json is missing these permissions.ask '
               'rules: ' + ', '.join(missing_ask) + '. Writing the hooks, the '

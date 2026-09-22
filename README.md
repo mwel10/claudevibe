@@ -94,11 +94,14 @@ conversation says:
   gate the actions Part A names as sensitive: git force-push, dropping or
   truncating a database, reading `.env` or a secrets directory. It also gates
   writing to the guardrail's own files, since whoever can rewrite a hook
-  decides what every later session may do. Its short `permissions.allow` list
-  does the opposite job, for four files only: the baseline's own instructions,
-  settings, subagent definitions and hooks live outside every project
-  directory, so without a user-level rule each new project has to be asked
-  about them one at a time. See "Why there is an allow list" below.
+  decides what every later session may do, and it names `WebFetch` so a fetch
+  asks per call rather than per domain whatever a project file says. Its short
+  `permissions.allow` list
+  does the opposite job: the baseline's own instructions, settings, subagent
+  definitions and hooks live outside every project directory, so without a
+  user-level rule each new project has to be asked about them one at a time,
+  and `WebSearch` is there because a question before every search is one that
+  gets answered without being read. See "Why there is an allow list" below.
 - **`hooks/check-destructive.sh`** (`PreToolUse` on Bash) — a pattern-level
   backstop for the same rules, independent of how the model interprets the
   command.
@@ -111,11 +114,10 @@ conversation says:
   rather than a sticker, since it stops matching the moment the code changes.
 - **`hooks/require-intake.sh`** (`PreToolUse` and `PostToolUse` on `Edit` and
   `Write`) — turns the intake into a precondition for writing code. See below.
-- **`hooks/scope-untrusted.sh`** (`PreToolUse` on `WebSearch` and `WebFetch`) —
-  allows a search without a question only inside a subagent whose own
-  definition declares nothing beyond read-only tools, and asks everywhere else,
-  the main conversation included. A fetch always asks, because its destination
-  is chosen by the model. See "Why a web read asks" below.
+- **`hooks/scope-untrusted.sh`** (`PreToolUse` on `WebFetch`) — asks before
+  every fetch, in every context, per call rather than per domain, because the
+  model chooses the URL. Searching is allowed outright and is not covered. See
+  "Why a fetch asks and a search does not" below.
 - **`hooks/verify-settings.sh`** (`SessionStart`) — reports, at the start of
   every session, what a project's own `.claude/settings.json` or
   `.claude/settings.local.json` asks for and what it can actually do. It
@@ -174,8 +176,8 @@ widened to `Read(~/.claude/**)`, because `~/.claude/projects/` holds the full
 transcript of every session in every other project, and handing that to each
 new session answers the least-privilege question in A1 backwards.
 `permissions.additionalDirectories` is not used either: it grants writing as
-well as reading. No web tool is in the list at all: `scope-untrusted.sh` decides those, and why
-a permission rule is the wrong instrument for them is the next section.
+well as reading. `WebSearch` is in the list, and `WebFetch` is not: why one web tool belongs
+there and the other never can is the next section.
 
 The mirror image of that question is writing. Reading `~/.claude/hooks/` is a
 convenience; writing it decides what every future session is allowed to do, and
@@ -187,61 +189,38 @@ which is the one channel with no check on it — and that is also the honest lim
 of these rules: an `ask` on `Edit` and `Write` does not see a `cp` or a
 `curl -o` writing the same file.
 
-#### Why a web read asks
+#### Why a fetch asks and a search does not
 
-A9 says untrusted content is read inside a subagent on purpose: if a page turns
-out to be a prompt injection, it lands in a read-only context holding no shell
-and no write tool, and the damage stops there. That was advice, and advice is
-carried out by the party least able to judge whether skipping it is fine this
-once.
+The first version of this hook asked before any web read from a context holding
+`Edit`, `Write` and `Bash` — the main conversation included — and allowed it
+inside a read-only subagent. That was A9 made mechanical, and on paper it was
+the right shape.
 
-It can be enforced, because a `PreToolUse` hook is told which context it is
-running in. Claude Code sets `agent_type` only for a subagent call, so
-`scope-untrusted.sh` can tell a web read in the main conversation, which also
-holds `Edit`, `Write` and `Bash`, from one inside a subagent.
+In use it was the wrong trade, and the argument against it is one this README
+already makes about something else: a warning that is always on is a warning
+that gets clicked away. A question before every search is answered without
+being read within about a day, and it does worse than fail — it buries the one
+web prompt that carries real information, because by then every web prompt
+looks the same. So `WebSearch` is allowed outright through `permissions.allow`,
+and A9's arrangement for searching is advisory again. That is a real reduction
+and it is written down as one, here and in A7: for a task that will read a lot
+of external material, delegating to `untrusted-reader` is still right, and now
+nothing makes you.
 
-The read-only test is an allowlist, and it is worth saying why, because the
-first version got it wrong in a way nothing caught. That version asked whether
-the agent declared `Edit`, `Write` or `NotebookEdit`. An agent declaring `Bash`
-passed as a clean reader, so attacker-controlled text could land in a context
-holding a shell — the exact arrangement A9 exists to prevent — and `Task` and
-every future MCP write tool would have passed too. An agent now qualifies only
-when *every* tool it declares is one of `Read`, `Grep`, `Glob`, `WebFetch` and
-`WebSearch`.
+The fetch is a different act. `WebFetch` takes a URL chosen by the model, so a
+page that says "now fetch `https://attacker/?q=…`" is a network call with
+nothing in front of it, which is B2's last bullet and A10 in one move. It asks
+in every context, inside a read-only subagent too, because that subagent can
+still read the filesystem and a fetch is how what it read would leave the
+machine. And it asks per call rather than per domain, which is the one thing an
+ordinary `WebFetch(domain:...)` approval cannot do: that approval covers every
+later fetch to the domain, including the one a page chose rather than you.
 
-A fetch is treated differently from a search, and this is the second thing the
-first version had backwards. `WebSearch` takes a query; the destination is not
-chosen by anyone. `WebFetch` takes a URL, so allowing it unconditionally inside
-a reader turns a page that says "now fetch `https://attacker/?q=…`" into a
-network call with nothing in front of it, which is B2's last bullet and A10 in
-one move. A fetch therefore keeps its ordinary per-domain question in every
-context, including the reader.
-
-The rule is deliberately not a list of agent names. It is A9's "read-only unless
-it must write" read back out of the file that states it, which means a new
-reader agent needs no edit to the hook, and an agent that later gains `Edit` or
-`Bash` stops being trusted with the web in the same movement instead of quietly
-keeping a privilege granted under different circumstances. The scope is read
-from the frontmatter block only, and the definition has to name itself, so a
-`tools:` line in a prompt body is prose and a project file cannot be graded for
-an agent it is not.
-
-`WebSearch` is therefore not in `permissions.allow`. It was, briefly, and that
-was the wrong instrument: a permission rule cannot distinguish which context
-calls a tool, so it would have granted the main conversation exactly what A9
-wants kept out of it. Approving the prompt is always available; the point is
-that the moment becomes visible.
-
-#### What the web scope hook does not cover
-
-`scope-untrusted.sh` is registered on `WebSearch` and `WebFetch`, and those are
-the two tools it sees. `Bash(curl …)`, `Bash(wget …)` and a fetch provided by an
-MCP server pull the same page into the same context and meet no scope check at
-all. This is the A7 subprocess limit again, in a second place: a rule about a
-tool is not a rule about an act. Say so rather than describing the property as
-if it held for web reading in general, and if it has to hold regardless of the
-route, the place for it is a deny rule on the Bash side or a network policy, not
-this hook.
+What no hook here covers: `Bash(curl …)`, `Bash(wget …)` and a fetch provided
+by an MCP server pull the same page into the same context and meet no check at
+all. That is the A7 subprocess limit in a second place — a rule about a tool is
+not a rule about an act — and if it has to hold regardless of the route, the
+place for it is a deny rule on the Bash side or a network policy, not this hook.
 
 The comparison in `verify-settings.sh` has a matching seam. Its file-tool branch
 compares capabilities, as described above. Its Bash branch compares text: it
@@ -315,7 +294,7 @@ from the same shift, and each was a silence before:
 - A project settings file that cannot be parsed used to produce an empty list of
   rules, which read exactly like a project that weakens nothing.
 
-`verify-settings.sh` checks at session start that the four rules are still
+`verify-settings.sh` checks at session start that those rules are still
 there, so a settings file restored from an older copy announces itself instead
 of quietly reintroducing the problem. It also warns when a `Read` rule reaches
 past those four. The first version of that check did not: it asked only whether
@@ -324,6 +303,14 @@ the exact configuration the paragraph above argues against. That is the third
 time a check in this repository verified presence rather than correctness, after
 the path comparison in the intake gate and the 404 stubs, which is why every
 check now has to be probed in both directions before it counts as installed.
+
+It happened a fourth time, in the release that allowed searching. The new check
+that WebSearch was still allowed was a `grep` for the string anywhere in
+`settings.json`, which would have passed just as happily with `WebSearch` sitting
+in `deny` while printing "so searching does not ask". A review caught it before
+it shipped, which is the only reason it is a footnote rather than a fifth entry
+in the list above. The rule that catches this is narrower than "probe in both
+directions": a check may assert only what its fixture actually varied.
 
 ### The delegation: `agents/`
 
@@ -584,7 +571,16 @@ A new `deny` pattern is a judgement call, and yours are quite possibly already
 stricter. A new entry under `hooks` is not a judgement call, and neither are the
 `permissions.allow` block and the `ask` rules on `~/.claude`: those are what
 make the baseline's own files readable and gate writing them, and
-`verify-settings.sh` names each one it cannot find at session start. When a
+`verify-settings.sh` names each one it cannot find at session start.
+
+The third kind is the one nothing detects, so read for it deliberately: a
+release can change the **matcher** on a `hooks` entry that already exists, and
+no check in this repository looks at a matcher. `self-test.sh` confirms that a
+hook's filename appears somewhere in the registered commands, which is true and
+is not the question. The release that allowed searching did exactly this,
+narrowing `scope-untrusted.sh` from `WebSearch|WebFetch` to `WebFetch` and
+adding `"WebSearch"` to `permissions.allow`. Merge both by hand; keeping the old
+matcher means every search still asks. When a
 release adds a hook, the script arrives with the update above and nothing wires
 it into `settings.json` for you, and a hook Claude Code was never told to run is
 as inert as one of the 404 stubs. Merge any `hooks` block the diff shows.

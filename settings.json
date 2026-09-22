@@ -21,6 +21,7 @@
       "Write(.env.*)"
     ],
     "ask": [
+      "WebFetch",
       "Edit(~/.claude/hooks/**)",
       "Write(~/.claude/hooks/**)",
       "Edit(~/.claude/agents/**)",
@@ -50,7 +51,8 @@
       "Read(~/.claude/CLAUDE.md)",
       "Read(~/.claude/settings.json)",
       "Read(~/.claude/agents/**)",
-      "Read(~/.claude/hooks/**)"
+      "Read(~/.claude/hooks/**)",
+      "WebSearch"
     ]
   },
   "hooks": {
@@ -84,7 +86,7 @@
         ]
       },
       {
-        "matcher": "WebSearch|WebFetch",
+        "matcher": "WebFetch",
         "hooks": [
           {
             "type": "command",

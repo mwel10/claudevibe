@@ -90,11 +90,13 @@ the guardrail's own source, not only to its installed copy.
   to run `self-test.sh`, which is exactly the boundary A7 warns about.
 - **MCP servers / external tools and their scope:** No MCP servers. External
   endpoints are `raw.githubusercontent.com` and `api.github.com`, read-only, for
-  install and update. `WebFetch` and `WebSearch` are available to
-  `untrusted-reader` and `dependency-checker`; `scope-untrusted.sh` allows a
-  search without a question only inside a subagent declaring nothing beyond
-  read-only tools, and asks everywhere else, with a fetch always asking because
-  its destination is chosen by the model.
+  install and update. `WebSearch` is allowed outright in every
+  context, because a question before every search was answered without being
+  read and buried the prompt that mattered; A9's arrangement for searching is
+  therefore advisory. `scope-untrusted.sh` asks before every `WebFetch`, in
+  every context including a read-only subagent, per call rather than per
+  domain, because the model chooses the URL. `Bash(curl)` and an MCP-provided
+  fetch reach the same page and meet no check.
 - **Subagents used in this project and the tool scope of each (see A9):** Five,
   all read-only, none setting `permissionMode`, none setting `model:`.
   `intake-scout`, `threat-modeller` and `security-reviewer` hold Read, Grep and
@@ -114,7 +116,14 @@ the guardrail's own source, not only to its installed copy.
   control: the hooks, which is the point of A7. O: the blast radius of a hostile
   or merely broken release is the full permission surface of every installer,
   with no version to roll back to; control: `self-test.sh` catches broken, not
-  hostile. N: `log-tool-call.sh` records that a Bash call occurred, not what it
+  hostile. Re-passed 2026-09-22 after searching was allowed outright: what an
+  untrusted web result can now reach without a check is the main conversation,
+  which holds Edit, Write and Bash, where before it reached a read-only
+  subagent. Accepted deliberately, because a prompt before every search was
+  answered without being read and buried the fetch prompt; the control that
+  remains is that `WebFetch`, where the model picks the destination, asks per
+  call in every context and is named in `permissions.ask` as well as in the
+  hook. Nothing covers `Bash(curl)` or an MCP-provided fetch. N: `log-tool-call.sh` records that a Bash call occurred, not what it
   did; keeping arguments out is defensible under B2, and is hereby a recorded
   decision rather than an implicit one. M: no CI, no secrets scanning, no
   `.gitignore`, no SBOM, no AIBOM — the prompt this repository's own state fails.
@@ -150,4 +159,4 @@ the guardrail's own source, not only to its installed copy.
 - **OPEN: audience.** How many people have installed this, and is it meant to be
   depended on by others? The answer decides whether release signing is
   proportionate or overkill.
-- **Last reviewed:** 2026-09-03
+- **Last reviewed:** 2026-09-22
