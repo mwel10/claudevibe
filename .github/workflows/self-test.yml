@@ -21,9 +21,13 @@ permissions:
 
 jobs:
   self-test:
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest, and the action pinned to a commit rather
+    # than a tag, because B7 asks that of every dependency this repository
+    # advises on and a workflow is not exempt. A tag can be moved; a commit
+    # cannot.
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: SHA256SUMS matches the files the README installs
         run: bash scripts/checksums.sh --check
