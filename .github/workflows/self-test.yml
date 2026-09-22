@@ -1,0 +1,70 @@
+name: self-test
+
+# The addendum says the approval gate here is "weak, and mostly not enforced":
+# no CI, no pre-commit hook, no reviewer, so the effective gate was the
+# maintainer remembering to run self-test.sh by hand. This is that gate made
+# mechanical for anything arriving through a pull request or a push.
+#
+# It deliberately installs into a throwaway HOME rather than testing the working
+# tree in place. The failure this repository is built around was an install that
+# looked complete and was inert, so the thing worth testing is the install, not
+# the source.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: SHA256SUMS matches the files the README installs
+        run: bash scripts/checksums.sh --check
+
+      - name: settings.json is valid JSON
+        run: python3 -c "import json; json.load(open('settings.json')); print('ok')"
+
+      - name: every agent definition declares a tool scope
+        # A9: a definition without a tools: line is an unbounded scope by
+        # another name, and nothing else in CI would notice one being added.
+        run: |
+          status=0
+          for f in agents/*.md; do
+            if ! grep -qE '^tools:' "$f"; then
+              echo "::error file=$f::no tools: line, which A9 forbids"
+              status=1
+            fi
+            if grep -qE '^permissionMode:[[:space:]]*(bypassPermissions|dontAsk)' "$f"; then
+              echo "::error file=$f::sets a permission mode that cannot ask, which A9 forbids"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: install into a throwaway HOME and prove the guardrail works
+        run: |
+          FAKE_HOME="$RUNNER_TEMP/home"
+          mkdir -p "$FAKE_HOME/.claude/hooks/lib" "$FAKE_HOME/.claude/agents"
+          cp global-CLAUDE.md "$FAKE_HOME/.claude/CLAUDE.md"
+          cp settings.json "$FAKE_HOME/.claude/settings.json"
+          cp hooks/*.sh "$FAKE_HOME/.claude/hooks/"
+          cp hooks/lib/deny-regex.py "$FAKE_HOME/.claude/hooks/lib/"
+          cp agents/*.md "$FAKE_HOME/.claude/agents/"
+          chmod +x "$FAKE_HOME/.claude/hooks/"*.sh
+          HOME="$FAKE_HOME" bash "$FAKE_HOME/.claude/hooks/self-test.sh"
+
+      - name: the shipped hooks are syntactically valid
+        run: |
+          status=0
+          for f in hooks/*.sh scripts/*.sh; do
+            bash -n "$f" || { echo "::error file=$f::bash syntax error"; status=1; }
+          done
+          python3 -m py_compile hooks/lib/deny-regex.py || status=1
+          exit $status

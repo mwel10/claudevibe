@@ -1,0 +1,11 @@
+# Python artefacts from the syntax check in CI and from running the hooks.
+__pycache__/
+*.pyc
+
+# Per-project permission approvals. These carry absolute paths including a
+# username, and they are a per-machine decision rather than something to ship:
+# an approval that travels is an approval nobody made.
+.claude/settings.local.json
+
+# macOS.
+.DS_Store

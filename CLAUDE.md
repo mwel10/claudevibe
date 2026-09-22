@@ -44,8 +44,13 @@ the guardrail's own source, not only to its installed copy.
   personal data is processed; revisit if the receipt `summary` field grows.
 - **Identity provider / auth model:** None in the artifact. The only identity
   that matters is the GitHub account that controls what installers receive.
-- **Environments and how they are separated:** None. `main` is production for
-  installers, with no tag, release or version pin in the install instructions.
+- **Environments and how they are separated:** `main` is where work lands and a
+  tag is what installers are told to pin to. The README carries both a quick
+  install from `main` and a verified install that pins to a tag, fetches the
+  file list out of `SHA256SUMS`, and checks every file before anything reaches
+  `~/.claude`. Pushing to `main` still reaches anyone who used the quick block,
+  so the two are separated by the installer's choice rather than by anything
+  here.
   `self-test.sh` redirects `HOME` to a temporary directory for its probes and
   removes those on exit, but its final check runs `verify-settings.sh` under the
   real `HOME`, and the deny-pattern and intake-gate checks read the real
@@ -65,8 +70,11 @@ the guardrail's own source, not only to its installed copy.
   `allow`, dropping a `hooks` registration, making a hook exit 0 where it should
   block, widening `tools:` or adding `permissionMode:` in `agents/*.md`, and
   renaming any file whose path appears in the README install URLs or in the
-  `hooks` block. `git push` to `main` is an immediate deploy to every installer
-  with no rollback point.
+  `hooks` block. `git push` to `main` is an immediate deploy to everyone who
+  used the quick install block. Publishing a tag or a release is the same act
+  with a longer half-life, because the verified install tells people to pin to
+  it: a tag is meant to be immutable, so moving or deleting one after it has
+  been installed is destructive in its own right.
 - **What the session-start check does and does not see:** it compares a project
   settings file against the global rules by capability rather than by spelling,
   and it separates what a project asks for from what it can do. An allow rule
@@ -86,8 +94,14 @@ the guardrail's own source, not only to its installed copy.
   Claude Code* prompts. Nothing else holds: `.github/` contains only
   `FUNDING.yml`, so no CI runs `self-test.sh` on a pull request and nothing
   blocks a merge; `.git/hooks/` holds only samples, so there is no pre-commit
-  check; there is no reviewer. The effective gate is the maintainer remembering
-  to run `self-test.sh`, which is exactly the boundary A7 warns about.
+  check; there is no reviewer. Since 2026-09-22 a GitHub Actions workflow runs
+  `self-test.sh` on every push and pull request, installing into a throwaway
+  `HOME` first, and also checks that `SHA256SUMS` is current and that no agent
+  definition has lost its `tools:` line. That turns the gate from something the
+  maintainer remembers into something that runs, but it does not yet block:
+  branch protection and required status checks are not configured, so a red run
+  reports and does not stop a merge. A commit made in an editor still meets
+  none of the local layer, per the boundary in A7.
 - **MCP servers / external tools and their scope:** No MCP servers. External
   endpoints are `raw.githubusercontent.com` and `api.github.com`, read-only, for
   install and update. `WebSearch` is allowed outright in every
@@ -131,19 +145,31 @@ the guardrail's own source, not only to its installed copy.
   applicable.
 - **Tool-call logging destination:** `~/.claude/logs/tool-calls.log`, written by
   `log-tool-call.sh`; timestamp, tool name and working directory only.
-- **Scanners, SBOM, and AIBOM in the pipeline:** None. `.github/` contains only
-  `FUNDING.yml`.
-- **OPEN: distribution integrity.** Installers fetch from `main` with no
-  checksum, no signature and no tag. `self-test.sh` is a consistency check, not
-  an authenticity one: it derives its expectations from the same `settings.json`
-  it validates, so it cannot detect that a deny rule was removed upstream. Are
-  tagged releases with published checksums and a pinned-commit install
-  acceptable? This is the most important open item on the list.
+- **Scanners, SBOM, and AIBOM in the pipeline:** No SAST, no secrets scanning,
+  no dependency scanning, no SBOM and no AIBOM. What does run in
+  `.github/workflows/self-test.yml` is the guardrail's own behavioural test, the
+  checksum currency check, the agent-scope check and a syntax check. There are
+  no third-party dependencies to scan; the Python is standard library and the
+  workflow uses only `actions/checkout`.
+- **OPEN: distribution integrity, narrowed on 2026-09-22.** Tagged releases,
+  `SHA256SUMS` and a verified install that checks before copying now exist, and
+  CI fails if a shipped file changes without the checksums being regenerated.
+  That closes transport and drift: a truncated download, a rewriting proxy or a
+  half-finished install is no longer silent, and an installer can pin to a fixed
+  version. It does not close authenticity. `SHA256SUMS` lives in the same tree
+  as the files it covers, so anyone able to write that tree can rewrite both,
+  and the tags are not signed. `self-test.sh` remains a consistency check for
+  the same reason: it derives its expectations from the `settings.json` it is
+  validating. Signing the tags is the remaining step and needs a key this
+  repository does not have.
 - **OPEN: approval gate.** Are branch protection and required status checks
   configured on GitHub? Are commits signed? Neither is visible from the working
   tree.
-- **OPEN: vulnerability intake (B13).** No `SECURITY.md`, no disclosure policy,
-  no contact route, while the README invites pull requests.
+- **Vulnerability intake (B13):** closed on 2026-09-22. `SECURITY.md` names the
+  route (GitHub private vulnerability reporting, so no personal email is
+  published), what counts as a finding here, what is already known and therefore
+  needs no report, and a five working day acknowledgement target. The README
+  points at it.
 - **OPEN: AIBOM (B12).** The README says the repository is vibe-coded but names
   no model or version, so an issue traced to a session cannot be reproduced.
 - **OPEN: writing this repository's own source.** The `ask` rules cover the
@@ -159,4 +185,7 @@ the guardrail's own source, not only to its installed copy.
 - **OPEN: audience.** How many people have installed this, and is it meant to be
   depended on by others? The answer decides whether release signing is
   proportionate or overkill.
+- **OPEN: branch protection.** CI runs but does not block. Required status
+  checks and protection on `main` are not configured, so a red self-test reports
+  and a merge still goes through.
 - **Last reviewed:** 2026-09-22
